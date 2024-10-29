@@ -14,6 +14,7 @@ from typing import (
     Type, 
     Optional, 
     get_args,
+    get_origin,
 )
 from pydantic import BaseModel, Field, create_model
 from pydantic_core import ValidationError
@@ -94,25 +95,39 @@ class FastOutputParser(Runnable):
     """
     def __init__(self, pydantic_object: BaseModel):
         self.pydantic_object: BaseModel = pydantic_object
-        self.expected_type = self._get_expected_type()
+        self.restriction = None  # Example for the literal case
+        self.expected_type: Tuple[type, type] = self._get_expected_type()
 
     def _get_field_name(self):
         """Get the name of the only field in the pydantic model.
         This is used to initialize the model with that field once the input has been validated.
         """
-        return list(self.pydantic_object.model_fields.keys())[0]
+        return next(iter(self.pydantic_object.model_fields.keys()))
     
-    def _get_expected_type(self) -> type:
+    def _get_expected_type(self) -> Tuple[type, type]:
+        """
+        Return a tuple (is_literal, type)
+        If the input is a literal, the type of the input should be in the list.
+        """
         first_field_name = self._get_field_name()
         field_info = self.pydantic_object.model_fields[first_field_name]
         field_type = field_info.annotation
-        if hasattr(field_type, '__origin__') and field_type.__origin__ is Literal:
-            literal_args = get_args(field_type)
-            if literal_args:
-                return type(literal_args[0])  # Return type of the first item of Literal
+        if get_origin(field_type) is Literal:
+            type_args = get_args(field_type)
+            self.restriction = type_args
+            if type_args:
+                return Literal, type(type_args[0])  # Return type of the first item of Literal
+            else:
+                return Literal, None  # Return None if the list is empty
+        elif get_origin(field_type) is list:
+            type_args = get_args(field_type)
+            if type_args:
+                return list, type_args[0]
+            else:
+                return list, None
               
         # If not a Literal, return the type directly
-        return field_type
+        return None, field_type
 
     def invoke(self, input: Union[str, BaseMessage] = {}, config: Optional[RunnableConfig] = None) -> BaseModel:
         """
@@ -127,13 +142,21 @@ class FastOutputParser(Runnable):
         try:
             if input == "":
                 raise ValueError("No input was provided.")
-            if self.expected_type is str or self.expected_type is bool:  # Is it a properly formatted string
+            if(
+                (self.expected_type[0] is None or self.expected_type[0] is Literal) 
+                and (self.expected_type[1] is str or self.expected_type[1] is bool)
+            ):  # Is it a properly formatted string
                 if input[0] == "\"":
                     input.replace("'", "\"")  # turns 'blah' into "blah" for json serialization.
                 elif input[-1] != "\"":
                     input = f"\"{input}\""  # turns blah into "blah" for json serialization.
                 # else: input already has " "
-            elif self.expected_type is List[str] and self.input[0] == "[" and self.input[1] == "'":
+            elif (
+                self.expected_type[0] is list 
+                and (self.expected_type[1] is str or self.expected_type[1] is bool)
+                and input[0] == "[" and input[1] == "'"
+            ):
+                print(input)
                 input.replace("'", "\"")  # Change ['a', 'b'] to ["a", "b"] for json serialization.
             json_string = "{\"" + f"{self._get_field_name()}\": {input}" + "}"
 
@@ -142,9 +165,21 @@ class FastOutputParser(Runnable):
             raise ValueError(f"Parsed output didn't match the expected schema: {err}")
         
     def get_format_instructions_chat(self) -> List[BaseMessage]:
-        if self.expected_type is int: return [("system", "Only respond with a single integer."), ("ai", "0")]
-        if self.expected_type is bool: return [("system", "Only respond with True or False."), ("ai", "False")]
-        raise ValueError(f"Did not implement get_format_instructions_chat for the type \"{self.expected}\".")
+        first_part = "You are an analyst who only responds with"
+        if self.expected_type[0] is list:
+            if self.expected_type[1] is str: return [("system", f"{first_part} a list of strings."), ("ai", "[\"abc\", \"def\"]")] 
+            elif self.expected_type[1] is int: return [("system", f"{first_part} a list of integers."), ("ai", "[1, 2, 3]")]
+            elif self.expected_type[1] is float: return [("system", f"{first_part} a list of floats."), ("ai", "[1.0, 2.0, 3.0]")]
+            elif self.expected_type[1] is bool: return [("system", f"{first_part} a list of either of \"True\" or \"False\"."), ("ai", "[\"True\", \"False\", \"True\"]")]
+        elif self.expected_type[0] is None:
+            if self.expected_type[1] is int: return [("system", f"{first_part} a single integer."), ("ai", "0")]
+            elif self.expected_type[1] is float: return [("system", f"{first_part} a single float."), ("ai", "1.0")]
+            elif self.expected_type[1] is bool: return [("system", f"{first_part} True or False."), ("ai", "False")]
+        elif self.expected_type[0] is Literal:
+            if self.expected_type[1] is int: return [("system", f"{first_part} one of the following integers : {self.restriction}"), ("ai", str(self.restriction[0]))]
+            elif self.expected_type[1] is float: return [("system", f"{first_part} one of the following floats : {self.restriction}"), ("ai", str(self.restriction[0]))]
+            elif self.expected_type[1] is str: return [("system", f"{first_part} one of the following values : {self.restriction}"), ("ai", self.restriction[0])]
+        raise ValueError(f"Did not implement get_format_instructions_chat for the type \"{self.expected_type}\".")
         
 
 class DetailedOutputParser(PydanticOutputParser):  # A wrapper on the PydanticOutputParser for managing format instructions and getting logprobs from calls.
@@ -154,7 +189,7 @@ class DetailedOutputParser(PydanticOutputParser):  # A wrapper on the PydanticOu
         return super().invoke(input)
     
     def get_format_instructions_chat(self) -> List[BaseMessage]:
-        return [("system", escape_characters(super().get_format_instructions()))]
+        return [("system", super().get_format_instructions())]
 
 
 class LLMFunctionResult:
@@ -192,7 +227,7 @@ class LLMFunction(Runnable):
     # Function call using an external ChatPromptTemplate
 
     llmfunction = LLMFunction(llm,
-        "Note all the names mentioned in this conversation, as well as the number of questions who were asked.",
+        "Note all the names mentioned in this conversation, as well as the number of questions that were asked.",
         names=["raph", ...],
         number_of_questions=5,
     )
@@ -237,16 +272,17 @@ class LLMFunction(Runnable):
         else:
             self.model = create_pydantic_model(**model_options)
             # fast single value output
-            if len(model_options) == 1: self.parser = FastOutputParser(pydantic_object=self.model)
-            # json composed output  
-            else: self.parser = DetailedOutputParser(pydantic_object=self.model)
+            if len(model_options) == 1 and next(iter(model_options.values())) is not str and next(iter(model_options.values())) != str:  # str values should be parsed as a json output.
+                self.parser = FastOutputParser(pydantic_object=self.model)
+            else:  # json composed output  
+                self.parser = DetailedOutputParser(pydantic_object=self.model)
 
         self.llm: Union[BaseChatModel, LLMWithTools] = llm  # NOTE : Can be changed to Runnable type if too specialized, but this would requires some adjustments to be work with running tools
 
         if not prompt:
             self.prompt = ChatHistory()
         elif isinstance(prompt, str):
-            self.prompt: ChatHistory = ChatHistory().append("system", prompt)
+            self.prompt: ChatHistory = ChatHistory().append("system", prompt, keep_variables=True)
         elif isinstance(prompt, list):  # List of tuples like [("system", "message"), ("ai", "response")]
             self.prompt: ChatHistory = ChatHistory().append(prompt)
         elif isinstance(prompt, ChatHistory):

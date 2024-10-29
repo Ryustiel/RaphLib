@@ -25,6 +25,8 @@ from langchain_core.runnables.base import Runnable
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.prompt_values import PromptValue
 
+from .helpers import escape_characters
+
 MessageLike = Union[str, Union[Tuple[str, str], Tuple[Literal["human", "ai", "system"], str, str]]]
 MessageInput = Union[MessageLike, List[MessageLike]]
 
@@ -44,6 +46,10 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
     name: Optional[str] = "ChatHistory"  # Comes from the Runnable class. The Runnable class handles the case where name is None.
     messages: List[ChatMessage] = []
     types: Dict[str, Literal["HumanMessage", "SystemMessage", "AIMessage", "ToolMessage"]] = {"system": "SystemMessage", "human": "HumanMessage", "ai": "AIMessage", "tool": "ToolMessage"}
+
+
+    def size(self):
+        return len(self.messages)
 
 
     def _select_messages(self, start_index: int, end_index: int) -> List[ChatMessage]:
@@ -98,7 +104,7 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
             raise ValueError(f"Unknown message BaseMessage subclass '{langchain_type}' for {message}.")
 
 
-    def _convert_to_messages(self, messages: MessageInput, message_part: str = None, third_message_part: str = None) -> List[ChatMessage]:
+    def _convert_to_messages(self, messages: MessageInput, message_part: str = None, third_message_part: str = None, keep_variables = False) -> List[ChatMessage]:
         """
         Create compatible messages as {type=str, content=str} from MessageInput.
         
@@ -111,6 +117,7 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         All inputs must be of type `str` or `List[Tuple]` containing the specified arguments.
         """
         if isinstance(messages, str):
+
             if third_message_part is not None and message_part is not None:  # Create a langchain type as specified.
                 langchain_type = messages
                 type = message_part
@@ -127,33 +134,41 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
                 content = messages
                 if not "human" in self.types.keys():
                     self.create_type("human", "HumanMessage")
-            return [ChatMessage(type=type, content=content)]
+            return [
+                ChatMessage(
+                    type = type, 
+                    content = content if keep_variables else escape_characters(content)
+                )
+            ]
 
         elif isinstance(messages, list):
             converted_messages = []
             for msg in messages:
                 if isinstance(msg, tuple):
-                    converted_messages.extend(self._convert_to_messages(*msg))
+                    converted_messages.extend(self._convert_to_messages(*msg, keep_variables=keep_variables))
                 elif isinstance(msg, (str, BaseMessage)):
-                    converted_messages.extend(self._convert_to_messages(msg))
+                    converted_messages.extend(self._convert_to_messages(msg, keep_variables=keep_variables))
                 else:
                     raise ValueError(f"Invalid message format in the message list {messages}. Expected string or tuple.")
             return converted_messages
         
         elif isinstance(messages, BaseMessage):
+
+            content = messages.content if keep_variables else escape_characters(messages.content)
+
             if isinstance(messages, SystemMessage):
-                return [ChatMessage(type="system", content=messages.content)]
+                return [ChatMessage(type="system", content=content)]
             elif isinstance(messages, AIMessage):
-                return [ChatMessage(type="ai", content=messages.content)]
+                return [ChatMessage(type="ai", content=content)]
             elif isinstance(messages, ToolMessage):
-                return [ChatMessage(type="system", content=messages.content)]
+                return [ChatMessage(type="system", content=content)]
             elif isinstance(messages, HumanMessage) or isinstance(messages, BaseMessage):
-                return [ChatMessage(type="human", content=messages.content)]
+                return [ChatMessage(type="human", content=content)]
             else:
-                raise ValueError(f"Unknown message BaseMessage subclass '{message.__class__.__name__}'.")
+                raise ValueError(f"Unknown message BaseMessage subclass '{message.__class__.__name__}'.")  # Useless until isinstance(messages, BaseMessage) is removed
             
         elif isinstance(messages, tuple):
-            return self._convert_to_messages(*messages)
+            return self._convert_to_messages(*messages, keep_variables=keep_variables)
         
         raise ValueError("Invalid message format. Expected string, tuple, or a list. Got neither.")
         
@@ -164,6 +179,12 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         """
         if not langchain_type in ("SystemMessage", "HumanMessage", "AIMessage", "ToolMessage"):
             raise ValueError(f"Unknown langchain type '{langchain_type}'.")
+        if label == "ai" and langchain_type != "AIMessage":
+            self.types[label] = "AIMessage"
+            print(f"The 'ai' has been forced into a AIMessage type instead of a {langchain_type} to conserve default types homogeneity.")
+        elif label == "system" and langchain_type != "SystemMessage":
+            self.types[label] = "SystemMessage"
+            print(f"The'system' has been forced into a SystemMessage type instead of a {langchain_type} to conserve default types homogeneity.")
         self.types[label] = langchain_type
 
 
@@ -252,10 +273,18 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         Example: chat.using({"human": "system"}).
         """        
         return self.copy().replace(types_replacement_map)
+    
+    def using_prompt(self, *args, keep_variables: bool = False) -> 'ChatHistory':
+        """
+        Return a copy of the object with the additional prompt inserted on the left.
+        """
+        return self.copy().insert(0, *args, keep_variables=keep_variables)
+
 
     def append(
         self,
-        *args
+        *args,
+        keep_variables: bool = False,
     ) -> 'ChatHistory':
         """
         Append messages to the current list.
@@ -266,14 +295,14 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         - A string 'content'
         - A list of tuples of parameters, e.g., [ ('langchain_type', 'type', 'content'), ... ] 
         """
-        self.messages.extend(self._convert_to_messages(*args))
+        self.messages.extend(self._convert_to_messages(*args, keep_variables=keep_variables))
         return self
-
 
     def insert(
         self,
         index: int,
         *args,
+        keep_variables: bool = False,
     ) -> 'ChatHistory':
         """
         Insert a message or a list of messages at the given index.
@@ -284,11 +313,11 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         - A string 'content'
         - A list of tuples of parameters, e.g., [ ('langchain_type', 'type', 'content'), ... ] 
         """
-        for msg in reversed(self._convert_to_messages(*args)):
+        for msg in reversed(self._convert_to_messages(*args, keep_variables=keep_variables)):
             self.messages.insert(index, msg)
         return self
     
-    def appendleft(self, *args) -> 'ChatHistory':
+    def appendleft(self, *args, keep_variables: bool = False) -> 'ChatHistory':
         """
         Insert the input at position 0.
 
@@ -298,7 +327,7 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         - A string 'content'
         - A list of tuples of parameters, e.g., [ ('langchain_type', 'type', 'content'), ... ] 
         """
-        return self.insert(0, *args)
+        return self.insert(0, *args, keep_variables=keep_variables)
 
     def pop(
         self,
@@ -324,11 +353,19 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         self,
         messages: MessageInput,
         start_index: Optional[int] = None,
-        end_index: Optional[int] = None
+        end_index: Optional[int] = None,
+        ignore_type: Optional[List[str]] = None,
+        keep_variables: bool = False,
     ) -> 'ChatHistory':
         """
         Overwrite messages in the specified interval [start_index, end_index).
         If no interval is provided, the entire message list is replaced.
+
+        With `ignore_type`, only messages not in `ignore_type` within the interval are overwritten.
+
+        - Keeps track of the position of the first message whose type is not in `ignore_type`.
+        - Deletes all messages that are not in `ignore_type` within the interval.
+        - Inserts the new messages at the position of the first non-ignored message.
 
         Allowed input formats to replace messages:
         - A tuple ('langchain_type', 'type', 'content')
@@ -338,11 +375,30 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
           [ ('langchain_type', 'type', 'content'), ... ]
         """
         # Convert the provided messages to a list of ChatMessage objects
-        converted_messages = self._convert_to_messages(messages)
+        converted_messages = self._convert_to_messages(messages, keep_variables=keep_variables)
 
         # Handle case where interval is not provided (replace entire list)
         if start_index is None and end_index is None:
-            self.messages = converted_messages
+            if ignore_type:
+                # Find the first message not in ignore_type
+                first_non_ignore = next(
+                    (i for i, msg in enumerate(self.messages) if msg.type not in ignore_type),
+                    None
+                )
+                if first_non_ignore is not None:
+                    # Delete all non-ignore_type messages in the entire list
+                    self.messages = [
+                        msg for msg in self.messages if msg.type in ignore_type
+                    ]
+                    # Insert the new messages at the first_non_ignore position
+                    if first_non_ignore > len(self.messages):
+                        first_non_ignore = len(self.messages)
+                    self.messages.insert(first_non_ignore, *converted_messages)
+                else:
+                    # If all messages are to be ignored, append the new messages at the end
+                    self.messages.extend(converted_messages)
+            else:
+                self.messages = converted_messages
             return self
 
         # Validate interval inputs
@@ -351,8 +407,32 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         if start_index < 0 or end_index > len(self.messages) or start_index >= end_index:
             raise IndexError("Invalid interval specified for overwriting.")
 
-        self.delete_interval(start_index, end_index)
-        self.messages[start_index:start_index] = converted_messages
+        if not ignore_type:
+            # Perform standard overwrite
+            self.delete_interval(start_index, end_index)
+            self.messages[start_index:start_index] = converted_messages
+        else:
+            # Find the first message in the interval not in ignore_type
+            first_non_ignore = None
+            for i in range(start_index, end_index):
+                if self.messages[i].type not in ignore_type:
+                    first_non_ignore = i
+                    break
+
+            if first_non_ignore is not None:
+                # Delete all messages in [start_index, end_index) not in ignore_type
+                self.messages = [
+                    msg for idx, msg in enumerate(self.messages)
+                    if not (start_index <= idx < end_index and msg.type not in ignore_type)
+                ]
+                # Adjust end_index after deletion
+                new_end_index = first_non_ignore
+                # Insert the new messages at the position of the first non-ignored message
+                self.messages.insert(first_non_ignore, *converted_messages)
+            else:
+                # If all messages in the interval are to be ignored, do not perform overwrite
+                pass  # Alternatively, you could choose to append or raise an exception
+
         return self
     
 
@@ -384,6 +464,19 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
 
     def invoke(self, input: dict, config: Optional[RunnableConfig] = None, **kwargs) -> PromptValue:
         return ChatPromptTemplate(self.as_message_like()).invoke(input, config, **kwargs)
+    
+    def pretty(self, input: dict, config: Optional[RunnableConfig] = None, **kwargs) -> str:
+        s = "ChatHistory ========================\n\n"
+        messages = self.invoke(input, config, **kwargs).messages
+        for message in messages:
+            s += message.__class__.__name__
+            s += " \t>\n"
+            s += message.content + "\n\n"
+        s += "=====================================\n"
+        return s
+    
+    def pretty_print(self, input: dict, config: Optional[RunnableConfig] = None, **kwargs):
+        print(self.pretty(input, config, **kwargs))
 
 
 # Example Usage
