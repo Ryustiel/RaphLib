@@ -92,6 +92,20 @@ def create_pydantic_model(**example) -> BaseModel:
 class FastOutputParser(Runnable):
     """
     Parse when the LLM does not provide a json output, and instead provide the desired output directly.
+
+    Example :
+
+    fnc = LLMFunction(LLM,
+        "Create a mask that represents for each word if it is a verb : {message}",
+        words=["word", ...],
+        mask=[True, ...]
+    )
+
+    fnc.prompt.pretty_print({"message": "Test"})
+
+    messages = ["I want to eat cakes", "How many cakes are in that truck ?", "Shit won't hold that cow", "Two trucks are necessary to keep on working."]
+    responses = fnc.run_many(message=messages)
+    print("\n".join([f"{message}\t\t\t>> {classe.words} {classe.mask}" for (message, classe) in zip(messages, responses)]))
     """
     def __init__(self, pydantic_object: BaseModel):
         self.pydantic_object: BaseModel = pydantic_object
