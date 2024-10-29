@@ -4,6 +4,7 @@ import langchain_core, pydantic_core, langchain, pydantic, langchain_openai  # D
 from .prompts import ChatHistory
 from .functions import LLMFunction, LLMFunctionResult, BatchLLMFunctionResult
 from .tools import LLMWithTools, ToolInterrupt
+from .helpers import balance_results
 from .setup import setup_env
 
 __all__ = [
@@ -13,6 +14,6 @@ __all__ = [
     'BatchLLMFunctionResult', 
     'LLMWithTools', 
     'ToolInterrupt', 
+    'balance_results',
     'setup_env',
-    'add_message', 
 ]
