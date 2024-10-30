@@ -465,7 +465,7 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
     def invoke(self, input: dict, config: Optional[RunnableConfig] = None, **kwargs) -> PromptValue:
         return ChatPromptTemplate(self.as_message_like()).invoke(input, config, **kwargs)
     
-    def pretty(self, input: dict, config: Optional[RunnableConfig] = None, **kwargs) -> str:
+    def pretty(self, input: dict = {}, config: Optional[RunnableConfig] = None, **kwargs) -> str:
         s = "ChatHistory ========================\n\n"
         messages = self.invoke(input, config, **kwargs).messages
         for message in messages:
@@ -475,7 +475,7 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         s += "=====================================\n"
         return s
     
-    def pretty_print(self, input: dict, config: Optional[RunnableConfig] = None, **kwargs):
+    def pretty_print(self, input: dict = {}, config: Optional[RunnableConfig] = None, **kwargs):
         print(self.pretty(input, config, **kwargs))
 
 
