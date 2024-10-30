@@ -280,6 +280,12 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         """
         return self.copy().insert(0, *args, keep_variables=keep_variables)
 
+    def using_end_prompt(self, *args, keep_variables: bool = False) -> 'ChatHistory':
+        """
+        Return a copy of the object with the additional prompt inserted on the right.
+        """
+        return self.copy().append(*args, keep_variables=keep_variables)
+
 
     def append(
         self,
