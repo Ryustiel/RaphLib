@@ -24,12 +24,12 @@ LLM = AzureChatOpenAI(
 # ================================================================= STATE =================================================================
 
 class State(BaseModel):
-    CHAT: ChatHistory
+    chat: ChatHistory
     next: str
     out: List[str]
 
 DEFAULT_STATE = State(
-    CHAT = ChatHistory(types={
+    chat = ChatHistory(types={
         "ai": "AIMessage", 
         "system": "SystemMessage", 
         "human": "HumanMessage", 
@@ -43,7 +43,17 @@ DEFAULT_STATE = State(
 # ================================================================= NODES =================================================================
 
 def conversation_node(state: State):
-    ...
+    response = (
+        state.chat.using_prompt("system", 
+            """
+            You are bored. You may chat with the members of the conversation but you really don't care. 
+            """)
+        | LLM
+    ).invoke({})
+    return {
+        "chat": state.chat.append("ai", response.content),
+        "out": [response.content]
+    }
 
 # ================================================================= GRAPH =================================================================
 
@@ -51,7 +61,10 @@ from langgraph.graph import StateGraph, START
 from langgraph.checkpoint.memory import MemorySaver
 
 BUILDER = StateGraph(State)
-BUILDER.add_node(START, conversation_node)
+BUILDER.add_node("Chat", conversation_node)
+
+BUILDER.add_edge(START, "Chat")
+BUILDER.add_edge("Chat", "Chat")
 
 MEMORY = MemorySaver()
 
