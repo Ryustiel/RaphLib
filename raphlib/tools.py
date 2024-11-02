@@ -1,3 +1,4 @@
+import logging
 from typing import (
     Any, 
     List, 
@@ -11,21 +12,32 @@ from langchain_core.runnables.base import Runnable
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.chat_models import BaseChatModel
+from langgraph.errors import NodeInterrupt
 from .helpers import escape_characters
 
+class ToolInterrupt(NodeInterrupt):
+    def __init__(self, tool_name: str, *args, **kwargs):
+        self.tool_name: str = tool_name
+        self.kwargs: dict = kwargs
+        super().__init__(f"Event {self.tool_name} was triggered. Value is {kwargs}.", *args)
 
-class ToolInterrupt(Exception):
-    def __init__(self, tool_name, tool_result, *args):
-        self.tool_name = tool_name
-        self.tool_result = tool_result
-        super().__init__(f"Event {self.tool_name} was triggered. Value is {self.tool_result}.", *args)
+    def __getitem__(self, key):
+        """Retrieve values from kwargs like a dict"""
+        if key in self.kwargs:
+            return self.kwargs[key]
+        else:
+            raise KeyError(f"Key '{key}' not found in ToolInterrupt kwargs.")
+    
+    def __repr__(self):
+        """Optional: custom string representation of the ToolInterrupt."""
+        return f"<ToolInterrupt tool_name={self.tool_name}, kwargs={self.kwargs}>"
 
 
 class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
     """
     A non serializable runnable that behaves like a BaseChatModel when invoked, but manages tools automatically.
     """
-    def __init__(self, llm: BaseChatModel, tools: List[StructuredTool], tool_events: List[str] = [], track_call: bool = False):
+    def __init__(self, llm: BaseChatModel, tools: List[StructuredTool], interruptions: List[str] = [], track_call: bool = False):
         """
         This class behaves like a BaseChatModel except for the fact that it 
         automatically sends tool responses to llms that require tool calls, 
@@ -33,9 +45,16 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
 
         track_call: bool -> If True tool call parameters and results are added to the conversation as system messages.
         If this option is set to True, the langchain chain has to support a List[BaseMessage] input instead of a single AIMessage object.
+
+        Tool Interrupts : 
+            A tool interrupt can be a regular tool call. 
+            A ToolInterrupt exception will be triggered with the function's results as a tool_result.
+
+            A tool function can be specifically designed to trigger a ToolInterrupt by raising a ToolInterrupt exception from within.
+            The exception will be handled and raised by the invoke() function of LLMWithTools.
         """
         self.tools = {tool.name: tool for tool in tools}
-        self.tool_events = tool_events
+        self.interruptions = interruptions
         self.llm: BaseChatModel = llm.bind_tools(tools)
         self.track_call = track_call
 
@@ -69,16 +88,25 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
             if hasattr(llm_response, 'tool_calls') and len(llm_response.tool_calls) > 0:
                 for tool_call in llm_response.tool_calls:
                     tool_name = tool_call["name"].lower()
-                    tool_result = self.tools[tool_name].invoke(tool_call)  # Invoke with the whole tool call object
-                    if tool_name in self.tool_events: 
-                        # Raise an exception with the tool data to interrupt execution and handle the result programatically.
-                        raise ToolInterrupt(tool_name, tool_result)
-                    else:
-                        # Update the messages with temporary tool messages so the result is handled by the LLM.
-                        messages.append(ToolMessage(tool_result, tool_call_id=tool_call["id"]))
+                    
+                    try:
+                        tool_result = self.tools[tool_name].invoke(tool_call)  # Invoke with the whole tool call object
+                        if tool_name in self.interruptions: 
+                            # Raise an exception with the tool data to interrupt execution and handle the result programatically.
+                            raise ToolInterrupt(tool_name, tool_result=tool_result)
+                        else:
+                            # Update the messages with temporary tool messages so the result is handled by the LLM.
+                            messages.append(ToolMessage(tool_result, tool_call_id=tool_call["id"]))
 
-                        if track_call:  # Update the tracking history
-                            call_tracking.append(self._create_tracking_message(tool_call, tool_result))
+                            if track_call:  # Update the tracking history
+                                call_tracking.append(self._create_tracking_message(tool_call, tool_result))
+
+                    except ToolInterrupt as e:
+                        raise e
+                    
+                    except Exception as e:
+                        logging.warning(f"Exception while calling tool {tool_name} : {e}")
+                        messages.append(ToolMessage(content=f"Exception while calling tool {tool_name} : {e}", tool_call_id=tool_call["id"]))
             else:
                 if track_call:
                     call_tracking.append(llm_response)

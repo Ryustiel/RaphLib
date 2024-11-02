@@ -38,6 +38,9 @@ class ChatMessage(BaseModel):
     type: str
     content: str
 
+    def create_copy(self, type: str):
+        return ChatMessage(type=type, content=self.content)
+
 
 class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on the {'messages': List[dict], 'types': Dict} structure.
     """
@@ -64,24 +67,26 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         return self.messages[start_index:end_index]
 
 
-    def _to_base_message(self, message: ChatMessage) -> BaseMessage:
+    def _to_base_message(self, messages: List[Any]) -> List[BaseMessage]:
         """
         Convert a message type to one of the built in names (system, human, ai) in the registry.
         """
-        langchain_type = self.types.get(message.type)
-        if langchain_type == "SystemMessage":
-            return SystemMessage(content=message.content)
-        elif langchain_type == "ToolMessage":
-            return SystemMessage(content=message.content)
-        elif langchain_type == "AIMessage":
-            return AIMessage(content=message.content)
-        elif langchain_type == "HumanMessage":
-            if message.type == "human":
-                return HumanMessage(content=message.content)
+        message_like_s: List[Tuple[str, str]] = [self._to_message_like(msg) for msg in messages]
+        
+        base_messages: List[BaseMessage] = []
+
+        for (type, content) in message_like_s:
+
+            if type == "system":
+                base_messages.append(SystemMessage(content=content))
+            elif type == "human":
+                base_messages.append(HumanMessage(content=content))
+            elif type == "ai":
+                base_messages.append(AIMessage(content=content))
             else:
-                return HumanMessage(content=f"{message.type}: {message.content}")  # Add type prefix
-        else:
-            raise ValueError(f"Unknown message BaseMessage subclass '{message.__class__.__name__}'.")
+                raise ValueError(f"Unknown message BaseMessage subclass '{type}' for {content}.")
+            
+        return base_messages
         
 
     def _to_message_like(self, message: ChatMessage) -> Tuple[str, str]:
@@ -124,16 +129,19 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
                 content = third_message_part
                 if not type in self.types.keys():
                     self.create_type(type, langchain_type)
+
             elif message_part is not None:  # Create the type as a human type if langchain type was not specified. (= speaker annotation)
                 type = messages
                 content = message_part
                 if not type in self.types.keys():
                     self.create_type(type, "HumanMessage")
+
             else:  # Create a human type if nothing was specified. (= no speaker annotation on the message)
                 type = "human"
                 content = messages
                 if not "human" in self.types.keys():
                     self.create_type("human", "HumanMessage")
+
             return [
                 ChatMessage(
                     type = type, 
@@ -146,8 +154,13 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
             for msg in messages:
                 if isinstance(msg, tuple):
                     converted_messages.extend(self._convert_to_messages(*msg, keep_variables=keep_variables))
+
                 elif isinstance(msg, (str, BaseMessage)):
                     converted_messages.extend(self._convert_to_messages(msg, keep_variables=keep_variables))
+
+                elif isinstance(msg, ChatMessage):  # Append chat messages directly
+                    converted_messages.append(msg)
+
                 else:
                     raise ValueError(f"Invalid message format in the message list {messages}. Expected string or tuple.")
             return converted_messages
@@ -169,6 +182,9 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
             
         elif isinstance(messages, tuple):
             return self._convert_to_messages(*messages, keep_variables=keep_variables)
+        
+        elif isinstance(messages, ChatMessage):
+            return [messages]
         
         raise ValueError("Invalid message format. Expected string, tuple, or a list. Got neither.")
         
@@ -237,11 +253,11 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
             
             if new_type not in self.types:
                 old_type_langchain = self.types[old_type]
-                print(f"Replacement type '{new_type}' does not exist in the type registry. Creating a new type as {old_type_langchain.__name__}.")  # TODO : Make it a log
+                print(f"Replacement type '{new_type}' does not exist in the type registry. Creating a new type as {old_type_langchain}.")  # TODO : Make it a log
                 self.create_type(new_type, old_type_langchain)
                 
             self.messages = [
-                ChatMessage(content=msg.content, type=new_type) if msg.type == old_type else msg
+                msg.create_copy(type=new_type) if msg.type == old_type else msg
                 for msg in self.messages
             ]
         return self
@@ -279,7 +295,7 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         Return a copy of the object with the additional prompt inserted on the left.
         """
         return self.copy().insert(0, *args, keep_variables=keep_variables)
-
+    
     def using_end_prompt(self, *args, keep_variables: bool = False) -> 'ChatHistory':
         """
         Return a copy of the object with the additional prompt inserted on the right.
@@ -449,11 +465,12 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         If no interval is provided, return the entire list of messages.
         """
         if start_index is None and end_index is None:
-            messages = self.messages # Return all messages if no interval is specified
+            return self._to_base_message(self.messages) # Return all messages if no interval is specified
         else:
-            messages = self._select_messages(start_index, end_index)
+            return self._to_base_message(
+                self._select_messages(start_index, end_index)
+            )
 
-        return [self._to_base_message(msg) for msg in messages]
     
     def as_message_like(self, start_index: Optional[int] = None, end_index: Optional[int] = None) -> Tuple[str, str]:
         """
@@ -483,6 +500,11 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
     
     def pretty_print(self, input: dict = {}, config: Optional[RunnableConfig] = None, **kwargs):
         print(self.pretty(input, config, **kwargs))
+
+
+
+
+
 
 
 # Example Usage

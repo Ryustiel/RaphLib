@@ -1,4 +1,5 @@
-from typing import List, Optional, Union
+import asyncio
+from typing import List, Optional, Union, Any, Awaitable
 
 ESCAPE_MAP = {
         '{': '{{',
@@ -97,6 +98,53 @@ def balance_results(
 
     return result
 
+
+# ================================================================= FIRST TASK COMPLETED
+
+async def first_completed(*tasks: Awaitable[Any]) -> Any:
+    """
+    Run multiple awaitables concurrently and return the result of the first one
+    that completes. Cancel all other awaitables once one completes.
+
+    :param tasks: Variable number of awaitable objects (coroutines, Tasks, Futures)
+    :return: The result of the first completed awaitable
+    :raises: Exception raised by the first completed awaitable
+    """
+    if not tasks:
+        raise ValueError("At least one awaitable must be provided")
+
+    # Create tasks from the awaitables
+    task_list: List[asyncio.Task] = [asyncio.create_task(task) for task in tasks]
+
+    try:
+        # Wait until the first task completes
+        done, pending = await asyncio.wait(
+            task_list, return_when=asyncio.FIRST_COMPLETED
+        )
+        
+        # Retrieve the first completed task
+        first_done = done.pop()
+
+        # Cancel all pending tasks
+        for pending_task in pending:
+            pending_task.cancel()
+        
+        # Optionally, wait for the cancellation to finish
+        await asyncio.gather(*pending, return_exceptions=True)
+
+        # Return the result of the first completed task
+        return first_done.result()
+
+    except Exception as e:
+        # If the first completed task raised an exception, re-raise it
+        raise e
+
+    finally:
+        # Ensure all tasks are cleaned up
+        for task in task_list:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*task_list, return_exceptions=True)
 
 
 # ================================================================= MAIN
