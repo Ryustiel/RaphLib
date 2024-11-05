@@ -492,8 +492,10 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         s = "ChatHistory ========================\n\n"
         messages = self.invoke(input, config, **kwargs).messages
         for message in messages:
-            s += message.__class__.__name__
-            s += " \t>\n"
+            if message.__class__.__name__ == "AIMessage":
+                s += "AI: "
+            elif message.__class__.__name__ == "SystemMessage":
+                s += "System: "
             s += message.content + "\n\n"
         s += "=====================================\n"
         return s
