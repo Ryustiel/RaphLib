@@ -1,3 +1,4 @@
+import time
 import asyncio
 from typing import List, Optional, Union, Any, Awaitable
 
@@ -145,6 +146,46 @@ async def first_completed(*tasks: Awaitable[Any]) -> Any:
             if not task.done():
                 task.cancel()
         await asyncio.gather(*task_list, return_exceptions=True)
+
+
+# ================================================================= LAPTIMER
+
+class LapTimer:
+    def __init__(self):
+        """
+        Initializes the LapTimer by storing the current high-resolution time.
+        """
+        self.start_time = time.perf_counter()
+        self.last_lap_time = self.start_time
+        self.is_first_lap = True
+
+    def lap(self, message: Optional[str] = None):
+        """
+        Calculates and prints the time difference between the last lap and the current lap.
+        If it's the first lap, it calculates the difference from initialization.
+        """
+        current_time = time.perf_counter()
+        time_diff = current_time - self.last_lap_time
+        
+        # Update the last lap time to the current time
+        self.last_lap_time = current_time
+        
+        # Calculate seconds and milliseconds
+        seconds = int(time_diff)
+        milliseconds = int((time_diff - seconds) * 1000)
+        
+        print("")
+
+        if message:
+            print(message, ":", end=" ")
+
+        if self.is_first_lap:
+            print(f"Time since initialization: {seconds} seconds {milliseconds} milliseconds")
+            self.is_first_lap = False
+        else:
+            print(f"Time since last lap: {seconds} seconds {milliseconds} milliseconds")
+
+        print("\n")
 
 
 # ================================================================= MAIN

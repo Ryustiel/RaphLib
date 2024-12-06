@@ -8,7 +8,7 @@ import dotenv, langchain_core, pydantic_core, langchain, pydantic, langchain_ope
 from .prompts import ChatHistory
 from .functions import LLMFunction, LLMFunctionResult, BatchLLMFunctionResult
 from .tools import LLMWithTools, ToolInterrupt
-from .helpers import balance_results, first_completed
+from .helpers import balance_results, first_completed, escape_characters, LapTimer
 from .setup import setup_env
 
 __all__ = [
@@ -21,4 +21,6 @@ __all__ = [
     'balance_results',
     'first_completed',
     'setup_env',
+    'escape_characters',
+    'LapTimer',
 ]

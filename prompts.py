@@ -245,7 +245,7 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         Replace messages of a specific type with another type.
         Modifies the original object and raises an error if the type or replacement type doesn't exist in the type registry.
         
-        Example: chat.replace({"human": "system"}).
+        Example: chat.replace({"old_type": "new_type"}).
         """
         for old_type, new_type in types_replacement_map.items():
             if old_type not in self.types:
@@ -286,7 +286,7 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         Returns a copy of the object where messages of a specific type are replaced by another type.
         Raises an error if the type or replacement type doesn't exist in the type registry.
         
-        Example: chat.using({"human": "system"}).
+        Example: chat.using({"old_type": "new_type"}).
         """        
         return self.copy().replace(types_replacement_map)
     
@@ -301,6 +301,33 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         Return a copy of the object with the additional prompt inserted on the right.
         """
         return self.copy().append(*args, keep_variables=keep_variables)
+    
+
+    def last(self, inp: int) -> 'ChatHistory':
+        """
+        Return a copy of the ChatHistory with only the inp last messages.
+        If input is negative exclude the last inp messages from the copy instead.
+        """
+        if inp < 0:
+            start_index = max(0, len(self.messages) + inp)
+            end_index = len(self.messages)
+        else:
+            start_index = max(0, len(self.messages) - inp)
+            end_index = len(self.messages)
+        return ChatHistory(messages=self.messages[start_index:end_index], types=self.types.copy())
+
+    def first(self, inp: int) -> 'ChatHistory':
+        """
+        Return a copy of the ChatHistory with only the inp first messages.
+        If input is negative exclude the first inp messages from the copy instead.
+        """
+        if inp < 0:
+            start_index = 0
+            end_index = max(0, len(self.messages) + inp)
+        else:
+            start_index = 0
+            end_index = min(len(self.messages), inp)
+        return ChatHistory(messages=self.messages[start_index:end_index], types=self.types.copy())
 
 
     def append(
@@ -472,7 +499,7 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
             )
 
     
-    def as_message_like(self, start_index: Optional[int] = None, end_index: Optional[int] = None) -> Tuple[str, str]:
+    def as_message_like(self, start_index: Optional[int] = None, end_index: Optional[int] = None) -> List[Tuple[str, str]]:
         """
         Retrieve messages as a list of (langchain type, content),
         in the specified interval [start_index, end_index).
@@ -484,18 +511,47 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
             messages = self._select_messages(start_index, end_index)
 
         return [self._to_message_like(msg) for msg in messages]
+    
+    def as_chat_history(self, include_metadata=True) -> 'ChatHistory':
+        """
+        Return a classic ChatHistory instance from the current messages.
+        This is designed to be used by subclasses that include 
+        their own metadata handling in their implementation of the _to_message_like() method.
+        If include_metadata is True, include metadata like last_inserted and current_channel in the message.
+        """
+        if include_metadata:
+            new_messages = [
+                ChatMessage(type=metadata[0], content=metadata[1])
+                for metadata in self.as_message_like()
+            ]
+            
+        else:
+            new_messages = [
+                ChatMessage(type=msg.type, content=msg.content)
+                for msg in self.messages
+            ]
+
+        return ChatHistory(messages=new_messages, types=self.types.copy())
 
     def invoke(self, input: dict, config: Optional[RunnableConfig] = None, **kwargs) -> PromptValue:
         return ChatPromptTemplate(self.as_message_like()).invoke(input, config, **kwargs)
+    
+    def to_str(self):
+        """
+        Convert the messages into a promptable string representation.
+        """
+        s = ""
+        messages = self.as_message_like()
+        for (type, content) in messages:
+            s += f"{content}\n"
+        return s
     
     def pretty(self, input: dict = {}, config: Optional[RunnableConfig] = None, **kwargs) -> str:
         s = "ChatHistory ========================\n\n"
         messages = self.invoke(input, config, **kwargs).messages
         for message in messages:
-            if message.__class__.__name__ == "AIMessage":
-                s += "AI: "
-            elif message.__class__.__name__ == "SystemMessage":
-                s += "System: "
+            s += message.__class__.__name__
+            s += " \t>\n"
             s += message.content + "\n\n"
         s += "=====================================\n"
         return s

@@ -270,6 +270,7 @@ class LLMFunction(Runnable):
                  prompt: Union[str, List[Tuple], ChatPromptTemplate] = None, 
                  max_retries: int = 2, 
                  handle_error: bool = True, 
+                 use_format_instructions: bool = True,
                  pydantic_model: BaseModel = None, 
                  **model_options):
         
@@ -306,7 +307,8 @@ class LLMFunction(Runnable):
         else:
             raise ValueError(f"Unsupported prompt format. Must be a ChatPromptTemplate, str, or list of tuples. Instead got {prompt}.")
 
-        self._add_format_instructions()
+        if use_format_instructions:  # Add format instructions to the prompt
+            self._add_format_instructions()
 
         
     def _add_format_instructions(self):
