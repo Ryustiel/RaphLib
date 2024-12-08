@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from langchain_core.tools import tool
 from langchain_openai import AzureChatOpenAI
 
-from raphlib import LLMFunction, ChatHistory, LLMWithTools, LLMFunctionResult, setup_env
+from src import LLMFunction, ChatHistory, LLMWithTools, LLMFunctionResult, setup_env
 
 # ================================================================= TOOLS =================================================================
 
