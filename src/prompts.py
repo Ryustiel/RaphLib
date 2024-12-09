@@ -40,6 +40,12 @@ class ChatMessage(BaseModel):
 
     def create_copy(self, type: str):
         return ChatMessage(type=type, content=self.content)
+    
+    def as_typed_message(self):
+        """
+        Return a new message that include information about the message type.
+        """
+        return f"{self.type}: {self.content}"
 
 
 class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on the {'messages': List[dict], 'types': Dict} structure.
@@ -104,7 +110,7 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
             if message.type == "human":
                 return ("human", message.content)
             else:
-                return ("human", f"{message.type}: {message.content}")  # Add type prefix
+                return ("human", message.as_typed_message())  # Add type prefix
         else:
             raise ValueError(f"Unknown message BaseMessage subclass '{langchain_type}' for {message}.")
 

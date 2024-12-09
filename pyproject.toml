@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "RaphLib"
 version = "0.1.0"
-description = "A library for easily running structured LLM calls and managing complex prompts. Based on pydantic and langchain."
+description = "Library for easily running structured LLM calls and managing complex prompts. Based on pydantic and langchain."
 authors = ["Raphael Nguyen <raph.nyn@gmail.com>"]
 
 [tool.poetry.dependencies]
@@ -10,6 +10,7 @@ pydantic = "^2.10.0"
 langchain-openai = "^0.2.11"
 langchain = "^0.3.10"
 langgraph = "^0.2.56"
+python-dotenv = "^1.0.1"
 
 [tool.poetry.dev-dependencies]
 # Add any dev-specific dependencies here, like linters, formatters, or testing libraries.

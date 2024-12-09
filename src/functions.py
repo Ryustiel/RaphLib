@@ -91,7 +91,9 @@ def create_pydantic_model(**example) -> BaseModel:
 
 class FastOutputParser(Runnable):
     """
-    Parse when the LLM does not provide a json output, and instead provide the desired output directly.
+    Parse the output of a LLM who does not provide a json output, 
+    and instead provide the desired output directly as a string value. (like "true", "12.5", or "[1, 2, 4]", etc...)
+    Attempts to directly parse the output using pythonic ways instead of relying on pydantic json validation.
 
     Example :
 
@@ -197,6 +199,10 @@ class FastOutputParser(Runnable):
         
 
 class DetailedOutputParser(PydanticOutputParser):  # A wrapper on the PydanticOutputParser for managing format instructions and getting logprobs from calls.
+    """
+    Unlike the FastOutputParser, this basically calls the pydantic json validation method.
+    This works when a LLM is asked to produce a structured json output, whose format was previously agreed upon when instanciating LLMFunction.
+    """
     def invoke(self, input: Union[str, BaseMessage], config: Optional[RunnableConfig] = None) -> Any:
         # input is the output of the llm call
         # TODO Manage logprobs here from the llm output : pass them over to the output step as BaseModel, logprob
@@ -252,6 +258,12 @@ class LLMFunction(Runnable):
     ])
 
     (conversation | llmfunction).invoke({"sentence": "What about Henriette ?"})
+
+    # The llm will be called on (
+    #   "Note all the names mentioned in this conversation, as well as the number of questions that were asked."
+    #   "sam: "bye felicia.",
+    #   "sam: "What about Henriette?"
+    # )
 
     # Example of a regular call
 
@@ -486,3 +498,25 @@ class LLMFunction(Runnable):
         finally:
             return asyncio.run(self.arun_many(inputs=inputs, max_retries=max_retries, handle_error=handle_error, use_threading=use_threading, **kwargs))
         
+"""
+Streaming that makes sense : 
+- When streaming a tool call mixed with a chat, streams the text as an event, 
+then the pydantic objects as events, and potential "reset" events in case of the model fails and tries again with a structured output.
+- Tools can be made compatible with streaming if they're defined with a special "streamable" decorator. 
+They should then act like a "streamable pydantic" async generator.
+- The weight of the output parsing should be on the streamed object model. Use a base "streamable pydantic" object.
+- When streaming a structured response, sends the structured pydantic object repetitively, with missing fields.
+
+1. Create and test a homeostatic pydantic object
+2. Check if a target pydantic model (that is generated through our functions) can be "made partial" automatically.
+3. Check the streaming methods that come with langchain and implement them with the new pydantic streaming method (with the detailed output parser for now).
+4. Make it compatible with the fast output parser.
+5. Analyze the tool decorator and look for ways to make it compatible with streaming the tool output (if it's a structured object, otherwise just wait).
+6. Move the "stream messages" gimmick into its own separate method, so that the change in behavior and return type is clearer.
+7. Either way, the model will have to wait for the full tool output. At this point, let's make the LLMTool streaming event based. (Create a method for just that)
+
+A LLMFunction could take in a "LLMTool compatible LLM object", which has "multi output" enabled, and so return the multi output, with the parsed response as a... string ?
+Or maybe as a compound special output like "Chat Catchup" + "Structured Output"
+
+8. Implement the Chat Catchup object.
+"""
