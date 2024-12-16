@@ -53,6 +53,7 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
     A class that handles messages and their types, dynamically creating a ChatPromptTemplate when needed.
     """
     name: Optional[str] = "ChatHistory"  # Comes from the Runnable class. The Runnable class handles the case where name is None.
+    # TODO : Stop shadowing name from Runnable
     messages: List[ChatMessage] = []
     types: Dict[str, Literal["HumanMessage", "SystemMessage", "AIMessage", "ToolMessage"]] = {"system": "SystemMessage", "human": "HumanMessage", "ai": "AIMessage", "tool": "ToolMessage"}
 

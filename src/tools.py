@@ -12,10 +12,10 @@ from langchain_core.runnables.base import Runnable
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.chat_models import BaseChatModel
-from langgraph.errors import NodeInterrupt
+# from langgraph.errors import NodeInterrupt : TODO : Think of a better system that is not dependent on the langgraph library
 from .helpers import escape_characters
 
-class ToolInterrupt(NodeInterrupt):
+class ToolInterrupt(Exception):
     def __init__(self, tool_name: str, *args, **kwargs):
         self.tool_name: str = tool_name
         self.kwargs: dict = kwargs
