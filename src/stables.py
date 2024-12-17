@@ -22,13 +22,35 @@ from pydantic_core import ValidationError
 
 # ================================================================= STABLE MODEL =================================
 
+class StableField(BaseModel):
+    """
+    Holds partial values and ways to evaluate them.
+    Lets you retrieve the last "partial value" or "textdelta" that was used to populate a particular field.
+    """
+    is_complete: bool = False
+    type: Type  # The expected type of the field when the value is complete.
+    value: str = ""
+    delta: Optional[str] = None
+    ...
+
 class StableModel(BaseModel):
     """
     A StableModel is a pydantic model that has a defined structure and can be parsed into a "closest" relative,
     usually with None values for the missing fields.
     Stable models can handle partial json objects.
     """
+    is_complete: bool = False
     ...
+
+    """
+    Idea : 
+    1. Just remove dirty parts of the incoming json and add as many closing brackets as needed.
+    2. Parse a "fully optional" version of the model.
+    3. Once the stream input dries out, attempts to parse the model with the actual object (that has mandatory fields) and set [is_complete], 
+    raise errors if it does not match. (Stable validation error)
+    4. Support detecting the "most partial field", so that maybe we don't need that StableField object...
+    Optionally compute a chunk diff with the previous output (stored) and populate StableField with the latest bits of chunks when asked for. 
+    """
 
 # ================================================================= CREATE MODEL =================================
 

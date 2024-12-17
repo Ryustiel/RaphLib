@@ -250,35 +250,14 @@ class LLMFunction(Runnable):
         # Build streaming flags
         self.is_streamable: bool = hasattr(llm, "stream")
 
-        if pydantic_model:
-            if len(model_options) >= 1:
-                raise ValueError(f"Provided {len(model_options)} model options and a pydantic model in the same time. Both options are mutually exclusive, it's either a prebuilt model or model options.")
-            # prebuilt pydantic model
-            else:
-                self.model = pydantic_model
-                self.parser = DetailedOutputParser(pydantic_object=self.model)
-        else:
-            self.model = pydantic_model_from_options(**model_options)
-            # fast single value output
-            if len(model_options) == 1 and next(iter(model_options.values())) is not str and next(iter(model_options.values())) != str:  # str values should be parsed as a json output.
-                self.parser = FastOutputParser(pydantic_object=self.model)
-            else:  # json composed output  
-                self.parser = DetailedOutputParser(pydantic_object=self.model)
+        self.pydantic_model = pydantic_model
+        self.model_options = model_options
+        self.model = None
+        self.stable_model = None
+        self._build_model()  # TODO : This is a temporary hack
 
         self.llm: Union[BaseChatModel, LLMWithTools] = llm  # NOTE : Can be changed to Runnable type if too specialized, but this would requires some adjustments to be work with running tools
-
-        if not prompt:
-            self.prompt = ChatHistory()
-        elif isinstance(prompt, str):
-            self.prompt: ChatHistory = ChatHistory().append("system", prompt, keep_variables=True)
-        elif isinstance(prompt, list):  # List of tuples like [("system", "message"), ("ai", "response")]
-            self.prompt: ChatHistory = ChatHistory().append(prompt)
-        elif isinstance(prompt, ChatHistory):
-            self.prompt: ChatHistory = prompt
-        elif isinstance(prompt, ChatPromptTemplate):
-            self.prompt: ChatHistory = ChatHistory().append(prompt.messages)  # Convert to ChatHistory
-        else:
-            raise ValueError(f"Unsupported prompt format. Must be a ChatPromptTemplate, str, or list of tuples. Instead got {prompt}.")
+        self._build_prompt(prompt)
 
         if use_format_instructions:  # Add format instructions to the prompt
             self._add_format_instructions()
@@ -297,6 +276,43 @@ class LLMFunction(Runnable):
             Expected a structured output as specified in the system prompt. 
             To avoid this issue, your only output should be a structured message as specified in the system prompt
         """  # TODO : Try to extract the relevant pydantic error string
+    
+
+    def _build_prompt(self, prompt: Union[None, str, List[Tuple[str, Optional[str], Optional[str]]], ChatHistory, ChatPromptTemplate]):
+        if not prompt:
+            self.prompt = ChatHistory()
+        elif isinstance(prompt, str):
+            self.prompt: ChatHistory = ChatHistory().append("system", prompt, keep_variables=True)
+        elif isinstance(prompt, list):  # List of tuples like [("system", "message"), ("ai", "response")]
+            self.prompt: ChatHistory = ChatHistory().append(prompt)
+        elif isinstance(prompt, ChatHistory):
+            self.prompt: ChatHistory = prompt
+        elif isinstance(prompt, ChatPromptTemplate):
+            self.prompt: ChatHistory = ChatHistory().append(prompt.messages)  # Convert to ChatHistory
+        else:
+            raise ValueError(f"Unsupported prompt format. Must be a ChatPromptTemplate, str, or list of tuples. Instead got {prompt}.")
+    
+
+    def _build_model(self):
+        """
+        Builds a pydantic model from the provided options.
+        This process is done once when the invoke method is first called.
+        It never occurs when the LLMFunction is only used for streaming, because only a stable_model is needed.
+        """
+        if self.pydantic_model:
+            if len(self.model_options) >= 1:
+                raise ValueError(f"Provided {len(self.model_options)} model options and a pydantic model in the same time. Both options are mutually exclusive, it's either a prebuilt model or model options.")
+            # prebuilt pydantic model
+            else:
+                self.model = self.pydantic_model
+                self.parser = DetailedOutputParser(pydantic_object=self.model)
+        else:
+            self.model = pydantic_model_from_options(**self.model_options)
+            # fast single value output
+            if len(self.model_options) == 1 and next(iter(self.model_options.values())) is not str and next(iter(self.model_options.values())) != str:  # str values should be parsed as a json output.
+                self.parser = FastOutputParser(pydantic_object=self.model)
+            else:  # json composed output  
+                self.parser = DetailedOutputParser(pydantic_object=self.model)
 
 
     def _prepare_local_prompt_and_input(self, input: Union[str, dict, PromptValue], kwargs: Optional[Dict[str, Any]]) -> Tuple[Dict[str, str], ChatHistory]:
@@ -390,15 +406,15 @@ class LLMFunction(Runnable):
             return LLMFunctionResult(True, result)
         
 
-    async def astream_raw(self, 
+    async def astream(self, 
                input: Union[str, dict, PromptValue] = None, 
                config: Optional[RunnableConfig] = None, 
                max_retries: int = 1, 
                raise_errors: bool = None, 
                **kwargs
-            ) -> AsyncGenerator[Union[str, StreamReset], LLMStreamFlags]:
+            ) -> AsyncGenerator[Union[StableModel, StreamReset], LLMStreamFlags]:
         """
-            Streams the output as a str textdelta or as a StableModel (depending on the configuration of the LLMFunction).
+            Streams the output as a StableModel.
             If max_retries is set, appends the errors, runs again with the errors integrated in the prompt
             until the function is successful or max_retries retries are reached.
 
@@ -430,6 +446,7 @@ class LLMFunction(Runnable):
                 for chunk in (local_prompt | self.llm).stream(input):
                     # chunk: BaseMessage
                     upstream = yield chunk.content
+                    # upstream = yield self.stable_model(chunk)
 
                     # TODO : Act upon upstream
 
@@ -458,58 +475,6 @@ class LLMFunction(Runnable):
 
         # else : Streaming was successful
 
-    async def astream(self, 
-               input: Union[str, dict, PromptValue] = None, 
-               config: Optional[RunnableConfig] = None, 
-               max_retries: int = 1, 
-               raise_errors: bool = None, 
-               **kwargs
-            ) -> AsyncGenerator[Union[StableModel, StreamReset], LLMStreamFlags]:
-        """
-            Streams the output as a StableModel.
-            If max_retries is set, appends the errors, runs again with the errors integrated in the prompt
-            until the function is successful or max_retries retries are reached.
-
-            /!\\ input values can be passed as the <input> dict or as <keyword arguments>.
-
-            max_retries: if set to None streams normally.
-                         if set to an int, streaming might return a StreamReset flag that indicates that 
-                         the content stream is beginning anew starting from the next item. External scripts typically want to reset their buffers.
-
-            raise_errors: if set to True raise the exception if all attempts failed, yield stream items directly a Type[StableModel] or a (textdelta) str.
-                          if set to False, always return a LLMFunctionResult with a success bool and the result or an error.
-        """
-        generator = self.astream_raw()
-        async for chunk in generator:
-            if isinstance(chunk, StreamReset):
-                upstream = yield chunk  # Passing on the StreamReset flag
-            else:
-                upstream = yield self.stable_model(chunk)
-            await generator.asend(upstream)
-
-    def stream_raw(self, 
-               input: Union[str, dict, PromptValue] = None, 
-               config: Optional[RunnableConfig] = None, 
-               max_retries: int = 1, 
-               raise_errors: bool = None, 
-               **kwargs
-            ) -> Generator[Union[StableModel, StreamReset], LLMStreamFlags, None]:
-        """
-            Streams the output as a StableModel.
-            If max_retries is set, appends the errors, runs again with the errors integrated in the prompt
-            until the function is successful or max_retries retries are reached.
-
-            /!\\ input values can be passed as the <input> dict or as <keyword arguments>.
-
-            max_retries: if set to None streams normally.
-                         if set to an int, streaming might return a StreamReset flag that indicates that 
-                         the content stream is beginning anew starting from the next item. External scripts typically want to reset their buffers.
-
-            raise_errors: if set to True raise the exception if all attempts failed, yield stream items directly a Type[StableModel] or a (textdelta) str.
-                          if set to False, always return a LLMFunctionResult with a success bool and the result or an error.
-        """
-        # Wrapper around stream
-        yield ""
 
     def stream(self, 
                input: Union[str, dict, PromptValue] = None, 
@@ -532,7 +497,14 @@ class LLMFunction(Runnable):
             raise_errors: if set to True raise the exception if all attempts failed, yield stream items directly a Type[StableModel] or a (textdelta) str.
                           if set to False, always return a LLMFunctionResult with a success bool and the result or an error.
         """
-        yield ""
+        async_gen_instance = self.astream(input=input, config=config, max_retries=max_retries, raise_errors=raise_errors, **kwargs)  # Initialize the async generator
+        try:
+            loop = asyncio.get_event_loop()
+            while True:
+                yield loop.run_until_complete(async_gen_instance.__anext__())
+        except StopAsyncIteration:
+            pass
+
 
     async def arun_many(self, 
                         inputs: List[Dict] = None, 
