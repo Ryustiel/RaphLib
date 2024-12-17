@@ -11,6 +11,8 @@ from typing import (
     List, 
     Tuple, 
     Literal, 
+    Generator, 
+    AsyncGenerator,
     Type, 
     Optional, 
     get_args,
@@ -30,63 +32,17 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from .prompts import ChatHistory
 from .tools import ToolInterrupt, LLMWithTools
 from .helpers import escape_characters
+from .stables import StableModel, pydantic_model_from_options
 
-ALLOWED_TYPES = (str, int, float, bool)
-ALLOWED_TYPE_KEYWORDS = (str, int, float, bool, list, List, List[str], List[int], List[float], List[bool])
 
-def _check_list_type(key: str, li: list, target_type: type) -> bool:
-    # Check if the list is conform to create a pydantic model
-    if not target_type in ALLOWED_TYPES:
-        raise ValueError(f"All choices should be of one of the allowed types [{ALLOWED_TYPES}] at @{key} : {li} ({target_type})")
-    if not all(isinstance(i, target_type) for i in li):
-        raise ValueError(f"All of the choices should be of the same type at @{key} : {li}")
-    return True
+LLMStreamFlags = Literal["cancel", "interrupt"]
 
-def create_pydantic_model(**example) -> BaseModel:
+
+class StreamReset(BaseModel):
     """
-    INFO : You can't mix types in literals defined through this function.
-    All models with literals should be created through this function so they have this property as well.
+    Flag raised when a stream has been reset.
     """
-    # Create a pydantic model from the example
-    fields = {}
-    for key, value in example.items():
-
-        if isinstance(value, list):
-            if len(value) > 1:  # The input was not [] or ["item"]
-                # Free typed list
-                if any(isinstance(i, type(...)) for i in value):  # The input was something like [example1, example2, ...]
-                    # Determine the type of the values
-                    values_no_ellipsis = [i for i in value if not isinstance(i, type(...))]  # Filter out ellipsis
-                    if len(values_no_ellipsis) >= 1:  # Ensure the input was not [...]
-                        target_type = type(values_no_ellipsis[0])
-                        if _check_list_type(key, values_no_ellipsis, target_type):  # The whole list is target_type
-                            fields[key] = (List[target_type], Field(..., example=values_no_ellipsis))
-                            continue
-
-                # Choices
-                else:  # The input was something like [choice1, choice2]
-                    target_type = type(value[0])
-                    if _check_list_type(key, value, target_type):  # The whole list is target_type : Prevents types from being mixed
-                        fields[key] = (Literal[tuple(value)], Field(...,))
-                        continue
-                
-        elif isinstance(value, tuple) and all(isinstance(i, str) for i in value):
-            # string with multiple examples
-            fields[key] = (str, Field(..., example=', '.join(value)))
-            continue
-        elif type(value) in ALLOWED_TYPES:  # Case example of a type
-            fields[key] = (type(value), Field(..., example=value))
-            continue
-        elif value in ALLOWED_TYPE_KEYWORDS:  # Case the type itself
-            fields[key] = (value, Field(...,))
-            continue
-
-        if isinstance(value, Type[Any]):  # Error management if NO continue statement was reached.
-            raise ValueError(f"Unknown field creation behavior for {key} : {value} (probably an unauthorized type keyword : ALLOWED_TYPE_KEYWORDS={ALLOWED_TYPE_KEYWORDS})")
-        else:
-            raise ValueError(f"Unknown field creation behavior for {key} : {value} (might be an unauthorized type : ALLOWED_TYPES={ALLOWED_TYPES} or an unknown tuple syntax, an empty list, or a list with only 1 item, ...)")
-    
-    return create_model("-".join(example.keys()), **fields)
+    error: str
 
 
 class FastOutputParser(Runnable):
@@ -230,7 +186,7 @@ class LLMFunction(Runnable):
     Prompt can be a string (interpreted as a system prompt), a [("type", "message"),] message list, or a ChatPromptTemplate.
     Kwargs are parameters for the pydantic model, except the special "pydantic_model" kwarg that accepts a prebuilt pydantic model.
 
-    handle_error: if True raise the exception if there is any error while invoking, return only the result as a single value (BaseModel).
+    raise_errors: if True raise the exception if there is any error while invoking, return only the result as a single value (BaseModel).
                   if False return a tuple with a success bool and the result or an error (LLMFunctionResult).
     
     Functionalities : 
@@ -281,14 +237,19 @@ class LLMFunction(Runnable):
                  llm: Runnable, 
                  prompt: Union[str, List[Tuple], ChatPromptTemplate] = None, 
                  max_retries: int = 2, 
-                 handle_error: bool = True, 
+                 raise_errors: bool = True, 
                  use_format_instructions: bool = True,
                  pydantic_model: BaseModel = None, 
                  **model_options):
         
-        self.handle_error = handle_error
+        if max_retries is None: raise ValueError("max_retries must be specified")
+
+        self.raise_errors = raise_errors
         self.max_retries = max_retries
-        
+
+        # Build streaming flags
+        self.is_streamable: bool = hasattr(llm, "stream")
+
         if pydantic_model:
             if len(model_options) >= 1:
                 raise ValueError(f"Provided {len(model_options)} model options and a pydantic model in the same time. Both options are mutually exclusive, it's either a prebuilt model or model options.")
@@ -297,7 +258,7 @@ class LLMFunction(Runnable):
                 self.model = pydantic_model
                 self.parser = DetailedOutputParser(pydantic_object=self.model)
         else:
-            self.model = create_pydantic_model(**model_options)
+            self.model = pydantic_model_from_options(**model_options)
             # fast single value output
             if len(model_options) == 1 and next(iter(model_options.values())) is not str and next(iter(model_options.values())) != str:  # str values should be parsed as a json output.
                 self.parser = FastOutputParser(pydantic_object=self.model)
@@ -338,23 +299,10 @@ class LLMFunction(Runnable):
         """  # TODO : Try to extract the relevant pydantic error string
 
 
-    def invoke(self, 
-               input: Union[str, dict, PromptValue] = None, 
-               config: Optional[RunnableConfig] = None, 
-               max_retries: int = None, 
-               handle_error: bool = None, 
-               **kwargs
-            ) -> Union[BaseModel, LLMFunctionResult]:
+    def _prepare_local_prompt_and_input(self, input: Union[str, dict, PromptValue], kwargs: Optional[Dict[str, Any]]) -> Tuple[Dict[str, str], ChatHistory]:
         """
-            Runs the runnable, appends the errors, runs it again with the errors 
-            until it is successful or max_retries is reached.
-
-            /!\\ input values can be passed as the <input> dict or as <keyword arguments>.
-
-            handle_error: if True raise the exception if there is any, return only the result as a single value (BaseModel).
-                        if False return a tuple with a success bool and the result or an error (LLMFunctionResult).
+        Prepares the prompt and input for a new execution of the LLMFunction.
         """
-        # PARSING ARGUMENTS
         local_prompt = self.prompt
 
         if not input: 
@@ -375,21 +323,44 @@ class LLMFunction(Runnable):
 
         else:
             raise ValueError(f"Unsupported input format. Must be a dict, str, or list of BaseMessage. Instead got {input}.")
+        
+        return input, local_prompt
 
-        if handle_error is None: handle_error = self.handle_error
+
+    def invoke(self, 
+               input: Union[str, dict, PromptValue] = None, 
+               config: Optional[RunnableConfig] = None, 
+               max_retries: Optional[int] = None, 
+               raise_errors: bool = None, 
+               **kwargs
+            ) -> Union[BaseModel, LLMFunctionResult]:
+        """
+            Runs the runnable, appends the errors, runs it again with the errors 
+            until it is successful or max_retries is reached.
+
+            /!\\ input values can be passed as the <input> dict or as <keyword arguments>.
+
+            raise_errors: if set to True raise the exception if all attempts failed, return the result itself as a Type[BaseModel].
+                          if set to False, always return a LLMFunctionResult with a success bool and the result or an error.
+        """
+        # PARSING ARGUMENTS
+        input, local_prompt = self._prepare_local_prompt_and_input(input=input, kwargs=kwargs)
+
+        if raise_errors is None: raise_errors = self.raise_errors
         if max_retries is None: max_retries = self.max_retries
 
         # RUNNING CHAIN WITH RETRY LOOP
-        current_retry_count = 1
-        error_messages = []
+        current_retry_count = 0
+        error_messages = list()
 
         result: BaseModel = None
-        while result is None:
-            if current_retry_count > 1:
-                logging.warning(f"Retrying : tried {current_retry_count} times")
+        while current_retry_count < max_retries:
+            if current_retry_count > 0:
+                logging.warning(f"Retrying : Attempt nb. {current_retry_count+1}")
 
             try:
                 result = (local_prompt | self.llm | self.parser).invoke(input)
+                break  # If no error, break the loop.
 
             except ValidationError as err:  # TODO : Use ValueError instead
                 error = str(err)
@@ -397,31 +368,176 @@ class LLMFunction(Runnable):
                 error_messages.append(error)
 
             except ToolInterrupt as interruption:
-                raise interruption  # Interrupt and pass on the tool interrupt event, regardless of the handle_error flag.
+                raise interruption  # Interrupt and pass on the tool interrupt event, regardless of the raise_errors flag.
             
             except Exception as err:
-                if handle_error: raise err
+                if raise_errors: raise err
                 else: return LLMFunctionResult(False, err)
 
             if current_retry_count >= max_retries:
                 err = Exception(f"{error_messages}\n\nRetried too many times : {current_retry_count} times.")
-                if handle_error: 
+                if raise_errors: 
                     raise err
                 else: 
                     return LLMFunctionResult(False, err)
 
             current_retry_count += 1
 
-        if handle_error: 
+        # the flag "raise_errors" also affects the return type of a valid result 
+        if raise_errors: 
             return result
         else: 
             return LLMFunctionResult(True, result)
+        
 
+    async def astream_raw(self, 
+               input: Union[str, dict, PromptValue] = None, 
+               config: Optional[RunnableConfig] = None, 
+               max_retries: int = 1, 
+               raise_errors: bool = None, 
+               **kwargs
+            ) -> AsyncGenerator[Union[str, StreamReset], LLMStreamFlags]:
+        """
+            Streams the output as a str textdelta or as a StableModel (depending on the configuration of the LLMFunction).
+            If max_retries is set, appends the errors, runs again with the errors integrated in the prompt
+            until the function is successful or max_retries retries are reached.
+
+            /!\\ input values can be passed as the <input> dict or as <keyword arguments>.
+
+            max_retries: if set to None streams normally.
+                         if set to an int, streaming might return a StreamReset flag that indicates that 
+                         the content stream is beginning anew starting from the next item. External scripts typically want to reset their buffers.
+
+            raise_errors: if set to True raise the exception if all attempts failed, yield stream items directly a Type[StableModel] or a (textdelta) str.
+                          if set to False, always return a LLMFunctionResult with a success bool and the result or an error.
+        """
+        if not self.is_streamable: raise Exception("The LLM provided to the constructor of the LLMFunction does not support streaming.")
+
+        input, local_prompt = self._prepare_local_prompt_and_input(input=input, kwargs=kwargs)
+
+        if raise_errors is None: raise_errors = self.raise_errors
+        if max_retries is None: max_retries = self.max_retries
+
+        # RUNNING CHAIN WITH RETRY LOOP
+        current_retry_count = 0
+        error_messages = list()
+
+        while current_retry_count < max_retries:
+            if current_retry_count > 0:
+                logging.warning(f"Retrying : Attempt nb. {current_retry_count+1}")
+
+            try:
+                for chunk in (local_prompt | self.llm).stream(input):
+                    # chunk: BaseMessage
+                    upstream = yield chunk.content
+
+                    # TODO : Act upon upstream
+
+                break  # End of streaming reached : Success
+
+            except ToolInterrupt as interruption:
+                raise interruption  # Interrupt and pass on the tool interrupt event, regardless of the raise_errors flag.
+            
+            except Exception as err:
+                if raise_errors: 
+                    raise err
+
+                else: 
+                    upstream = yield StreamReset(error=str(err))
+
+                    # TODO : Act upon upstream
+
+                current_retry_count += 1
+
+        if current_retry_count >= max_retries:
+            err = Exception(f"{error_messages}\n\nRetried too many times : {current_retry_count} times.")
+            if raise_errors: 
+                raise err
+            else: 
+                yield StreamReset(error=str(err))
+
+        # else : Streaming was successful
+
+    async def astream(self, 
+               input: Union[str, dict, PromptValue] = None, 
+               config: Optional[RunnableConfig] = None, 
+               max_retries: int = 1, 
+               raise_errors: bool = None, 
+               **kwargs
+            ) -> AsyncGenerator[Union[StableModel, StreamReset], LLMStreamFlags]:
+        """
+            Streams the output as a StableModel.
+            If max_retries is set, appends the errors, runs again with the errors integrated in the prompt
+            until the function is successful or max_retries retries are reached.
+
+            /!\\ input values can be passed as the <input> dict or as <keyword arguments>.
+
+            max_retries: if set to None streams normally.
+                         if set to an int, streaming might return a StreamReset flag that indicates that 
+                         the content stream is beginning anew starting from the next item. External scripts typically want to reset their buffers.
+
+            raise_errors: if set to True raise the exception if all attempts failed, yield stream items directly a Type[StableModel] or a (textdelta) str.
+                          if set to False, always return a LLMFunctionResult with a success bool and the result or an error.
+        """
+        generator = self.astream_raw()
+        async for chunk in generator:
+            if isinstance(chunk, StreamReset):
+                upstream = yield chunk  # Passing on the StreamReset flag
+            else:
+                upstream = yield self.stable_model(chunk)
+            await generator.asend(upstream)
+
+    def stream_raw(self, 
+               input: Union[str, dict, PromptValue] = None, 
+               config: Optional[RunnableConfig] = None, 
+               max_retries: int = 1, 
+               raise_errors: bool = None, 
+               **kwargs
+            ) -> Generator[Union[StableModel, StreamReset], LLMStreamFlags, None]:
+        """
+            Streams the output as a StableModel.
+            If max_retries is set, appends the errors, runs again with the errors integrated in the prompt
+            until the function is successful or max_retries retries are reached.
+
+            /!\\ input values can be passed as the <input> dict or as <keyword arguments>.
+
+            max_retries: if set to None streams normally.
+                         if set to an int, streaming might return a StreamReset flag that indicates that 
+                         the content stream is beginning anew starting from the next item. External scripts typically want to reset their buffers.
+
+            raise_errors: if set to True raise the exception if all attempts failed, yield stream items directly a Type[StableModel] or a (textdelta) str.
+                          if set to False, always return a LLMFunctionResult with a success bool and the result or an error.
+        """
+        # Wrapper around stream
+        yield ""
+
+    def stream(self, 
+               input: Union[str, dict, PromptValue] = None, 
+               config: Optional[RunnableConfig] = None, 
+               max_retries: int = 1, 
+               raise_errors: bool = None, 
+               **kwargs
+            ) -> Generator[Union[StableModel, StreamReset], LLMStreamFlags, None]:
+        """
+            Streams the output as a StableModel.
+            If max_retries is set, appends the errors, runs again with the errors integrated in the prompt
+            until the function is successful or max_retries retries are reached.
+
+            /!\\ input values can be passed as the <input> dict or as <keyword arguments>.
+
+            max_retries: if set to None streams normally.
+                         if set to an int, streaming might return a StreamReset flag that indicates that 
+                         the content stream is beginning anew starting from the next item. External scripts typically want to reset their buffers.
+
+            raise_errors: if set to True raise the exception if all attempts failed, yield stream items directly a Type[StableModel] or a (textdelta) str.
+                          if set to False, always return a LLMFunctionResult with a success bool and the result or an error.
+        """
+        yield ""
 
     async def arun_many(self, 
                         inputs: List[Dict] = None, 
                         max_retries: int = None, 
-                        handle_error=None, 
+                        raise_errors=None, 
                         use_threading=False, 
                         **kwargs
                     ) -> Union[List[BaseModel], BatchLLMFunctionResult]:
@@ -434,7 +550,7 @@ class LLMFunction(Runnable):
         In other words, each keyword argument is the list of the arguments of that specific input keyword for each item of the batch.
         We should have the same value for each (len(arg) for arg in kwargs).
         """
-        if handle_error is None: handle_error = self.handle_error
+        if raise_errors is None: raise_errors = self.raise_errors
         if max_retries is None: max_retries = self.max_retries
 
         if inputs:
@@ -458,16 +574,16 @@ class LLMFunction(Runnable):
             # Non-blocking: Use asyncio.to_thread to run tasks in a thread-pool without blocking the event loop
             async def run_in_thread_async(input):
                 return await asyncio.to_thread(
-                    self.run, input, max_retries=max_retries, handle_error=False
+                    self.run, input, max_retries=max_retries, raise_errors=False
                 )
             # Launch tasks asynchronously using asyncio.gather
             tasks = [run_in_thread_async(input) for input in inputs]
             results = await asyncio.gather(*tasks)
         else:
             # Just run the batch via asyncio
-            results = await asyncio.gather(*(self.ainvoke(input, max_retries=max_retries, handle_error=False) for input in inputs))
+            results = await asyncio.gather(*(self.ainvoke(input, max_retries=max_retries, raise_errors=False) for input in inputs))
 
-        if handle_error:
+        if raise_errors:
 
             errors = "\n"
 
@@ -477,7 +593,7 @@ class LLMFunction(Runnable):
             
             return [res.result for res in results]  # List[BaseModel]
         
-        else:  # handle_error = False
+        else:  # raise_errors = False
             success = all(lr.success for lr in results)
             return BatchLLMFunctionResult(success, results)
         
@@ -485,18 +601,18 @@ class LLMFunction(Runnable):
     def run_many(self, 
                  inputs: List[Dict]=None, 
                  max_retries: int=None, 
-                 handle_error=None, 
+                 raise_errors=None, 
                  use_threading=False, 
                  **kwargs
             ) -> Union[List[BaseModel], BatchLLMFunctionResult]:
         """ Synchronous wrapper around arun_many()."""
         try:
             if asyncio.get_event_loop().is_running():  # Running inside an async loop
-                future = asyncio.ensure_future(self.arun_many(inputs=inputs, max_retries=max_retries, handle_error=handle_error, use_threading=use_threading, **kwargs))
+                future = asyncio.ensure_future(self.arun_many(inputs=inputs, max_retries=max_retries, raise_errors=raise_errors, use_threading=use_threading, **kwargs))
                 return asyncio.get_event_loop().run_until_complete(future)
                 
         finally:
-            return asyncio.run(self.arun_many(inputs=inputs, max_retries=max_retries, handle_error=handle_error, use_threading=use_threading, **kwargs))
+            return asyncio.run(self.arun_many(inputs=inputs, max_retries=max_retries, raise_errors=raise_errors, use_threading=use_threading, **kwargs))
         
 """
 Streaming that makes sense : 
