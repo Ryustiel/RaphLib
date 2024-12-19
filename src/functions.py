@@ -20,6 +20,7 @@ from typing import (
 )
 from pydantic import BaseModel, Field, create_model
 from pydantic_core import ValidationError
+from abc import ABC, abstractmethod
 
 from langchain.prompts import ChatPromptTemplate
 from langchain.output_parsers import PydanticOutputParser
@@ -29,20 +30,21 @@ from langchain_core.runnables.config import RunnableConfig
 from langchain_core.prompt_values import PromptValue
 from langchain_core.language_models.chat_models import BaseChatModel
 
+from .helpers import escape_characters
+from .stream import StreamEvent, ResetStream, StreamFlags
 from .prompts import ChatHistory
 from .tools import ToolInterrupt, LLMWithTools
-from .helpers import escape_characters
 from .stables import StableModel, pydantic_model_from_options
 
 
-LLMStreamFlags = Literal["cancel", "interrupt"]
+class OutputParser(Runnable, ABC):
+    @abstractmethod
+    def get_format_instructions_chat(self) -> List[BaseMessage]:
+        pass
 
-
-class StreamReset(BaseModel):
-    """
-    Flag raised when a stream has been reset.
-    """
-    error: str
+    @abstractmethod
+    def invoke(self, input: Union[str, BaseMessage] = {}, config: Optional[RunnableConfig] = None) -> BaseModel:
+        pass
 
 
 class FastOutputParser(Runnable):
@@ -159,7 +161,7 @@ class DetailedOutputParser(PydanticOutputParser):  # A wrapper on the PydanticOu
     Unlike the FastOutputParser, this basically calls the pydantic json validation method.
     This works when a LLM is asked to produce a structured json output, whose format was previously agreed upon when instanciating LLMFunction.
     """
-    def invoke(self, input: Union[str, BaseMessage], config: Optional[RunnableConfig] = None) -> Any:
+    def invoke(self, input: Union[str, BaseMessage], config: Optional[RunnableConfig] = None) -> BaseModel:
         # input is the output of the llm call
         # TODO Manage logprobs here from the llm output : pass them over to the output step as BaseModel, logprob
         return super().invoke(input)
@@ -233,6 +235,8 @@ class LLMFunction(Runnable):
 
     llmfunction.run_many([{"word": "strawberry"}, {"word": "banana"}])
     """
+    parser: OutputParser
+
     def __init__(self, 
                  llm: Runnable, 
                  prompt: Union[str, List[Tuple], ChatPromptTemplate] = None, 
@@ -295,7 +299,7 @@ class LLMFunction(Runnable):
 
     def _build_model(self):
         """
-        Builds a pydantic model from the provided options.
+        Builds a pydantic model and a parser from the provided options.
         This process is done once when the invoke method is first called.
         It never occurs when the LLMFunction is only used for streaming, because only a stable_model is needed.
         """
@@ -411,8 +415,9 @@ class LLMFunction(Runnable):
                config: Optional[RunnableConfig] = None, 
                max_retries: int = 1, 
                raise_errors: bool = None, 
+               disable_parsing: bool = False,
                **kwargs
-            ) -> AsyncGenerator[Union[StableModel, StreamReset], LLMStreamFlags]:
+            ) -> AsyncGenerator[Union[StableModel, StreamEvent], StreamFlags]:
         """
             Streams the output as a StableModel.
             If max_retries is set, appends the errors, runs again with the errors integrated in the prompt
@@ -421,11 +426,13 @@ class LLMFunction(Runnable):
             /!\\ input values can be passed as the <input> dict or as <keyword arguments>.
 
             max_retries: if set to None streams normally.
-                         if set to an int, streaming might return a StreamReset flag that indicates that 
+                         if set to an int, streaming might return a ResetStream flag that indicates that 
                          the content stream is beginning anew starting from the next item. External scripts typically want to reset their buffers.
 
             raise_errors: if set to True raise the exception if all attempts failed, yield stream items directly a Type[StableModel] or a (textdelta) str.
                           if set to False, always return a LLMFunctionResult with a success bool and the result or an error.
+
+            disable_parsing: if set to True, the LLMFunction will not parse the output into a StableModel. Instead, it will yield the raw output as a string.
         """
         if not self.is_streamable: raise Exception("The LLM provided to the constructor of the LLMFunction does not support streaming.")
 
@@ -445,8 +452,11 @@ class LLMFunction(Runnable):
             try:
                 for chunk in (local_prompt | self.llm).stream(input):
                     # chunk: BaseMessage
-                    upstream = yield chunk.content
-                    # upstream = yield self.stable_model(chunk)
+                    if disable_parsing:
+                        upstream = yield chunk.content
+                    else:
+                        upstream = yield chunk.content
+                        # upstream = yield self.stable_model(chunk)
 
                     # TODO : Act upon upstream
 
@@ -460,7 +470,7 @@ class LLMFunction(Runnable):
                     raise err
 
                 else: 
-                    upstream = yield StreamReset(error=str(err))
+                    upstream = yield ResetStream(error=str(err))
 
                     # TODO : Act upon upstream
 
@@ -471,7 +481,7 @@ class LLMFunction(Runnable):
             if raise_errors: 
                 raise err
             else: 
-                yield StreamReset(error=str(err))
+                yield ResetStream(error=str(err))
 
         # else : Streaming was successful
 
@@ -482,7 +492,7 @@ class LLMFunction(Runnable):
                max_retries: int = 1, 
                raise_errors: bool = None, 
                **kwargs
-            ) -> Generator[Union[StableModel, StreamReset], LLMStreamFlags, None]:
+            ) -> Generator[Union[StableModel, StreamEvent], StreamFlags, None]:
         """
             Streams the output as a StableModel.
             If max_retries is set, appends the errors, runs again with the errors integrated in the prompt
@@ -491,7 +501,7 @@ class LLMFunction(Runnable):
             /!\\ input values can be passed as the <input> dict or as <keyword arguments>.
 
             max_retries: if set to None streams normally.
-                         if set to an int, streaming might return a StreamReset flag that indicates that 
+                         if set to an int, streaming might return a ResetStream flag that indicates that 
                          the content stream is beginning anew starting from the next item. External scripts typically want to reset their buffers.
 
             raise_errors: if set to True raise the exception if all attempts failed, yield stream items directly a Type[StableModel] or a (textdelta) str.

@@ -1,6 +1,8 @@
 import time
 import asyncio
-from typing import List, Optional, Union, Any, Awaitable
+from typing import List, Optional, Union, Any, Awaitable, Type, Dict, Any, get_args, get_origin
+from pydantic import BaseModel, create_model
+from pydantic.fields import FieldInfo
 
 ESCAPE_MAP = {
         '{': '{{',
@@ -147,6 +149,45 @@ async def first_completed(*tasks: Awaitable[Any]) -> Any:
                 task.cancel()
         await asyncio.gather(*task_list, return_exceptions=True)
 
+
+# ================================================================= MAKE FIELDS OPTIONAL
+
+def optionalize_type(type_: Any) -> Any:
+    """
+    Recursively make a type annotation optional. Handles BaseModel subclasses,
+    lists, and other generic types.
+    """
+    origin = get_origin(type_)
+    if origin is not None:
+        # Handle generic types such as List, Dict, Set, etc.
+        args = get_args(type_)
+        optionalized_args = tuple(optionalize_type(arg) for arg in args)
+        return Optional[origin[optionalized_args]]
+    elif isinstance(type_, type) and issubclass(type_, BaseModel):
+        # Handle nested Pydantic models recursively
+        nested_fields = get_all_fields_as_optional(type_)
+        nested_model = create_model(
+            type_.__name__,
+            **nested_fields
+        )
+        return Optional[nested_model]
+    else:
+        # Base case: For simple types, just wrap with Optional
+        return Optional[type_]
+
+def get_all_fields_as_optional(model: Type[BaseModel]) -> Dict[str, FieldInfo]:
+    """
+    Return the model fields with all fields set to optional with None as the default.
+    If a field is another Pydantic model or a container, process it recursively.
+    """
+    fields: Dict[str, Any] = {}
+    for name, field in model.model_fields.items():
+        # Recursively make the field type optional
+        optional_type = optionalize_type(field.annotation)
+        # Assign a default value of None to the field
+        fields[name] = (optional_type, None)
+    
+    return fields
 
 # ================================================================= LAPTIMER
 

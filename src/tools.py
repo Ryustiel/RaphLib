@@ -2,7 +2,10 @@ import logging
 from typing import (
     Any, 
     List, 
+    Union, 
     Optional, 
+    Generator,
+    AsyncGenerator,
 )
 
 from langchain_core.tools import StructuredTool
@@ -12,8 +15,9 @@ from langchain_core.runnables.base import Runnable
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.chat_models import BaseChatModel
-# from langgraph.errors import NodeInterrupt : TODO : Think of a better system that is not dependent on the langgraph library
+
 from .helpers import escape_characters
+from .stream import StreamEvent, StreamFlags, ToolCallError, ToolCallInitialization, ToolCallResult
 
 class ToolInterrupt(Exception):
     def __init__(self, tool_name: str, *args, **kwargs):
@@ -41,17 +45,21 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
         """
         This class behaves like a BaseChatModel except for the fact that it 
         automatically sends tool responses to llms that require tool calls, 
-        and returns only AIMessages that do not contain tool calls anymore.
+        and returns the final AIMessage response, or a list of messages corresponding to the output.
+
+        NOTE : If you are registering interruptions (len(self.interruptions) > 0), you have to handle ToolInterrupt exceptions.
 
         track_call: bool -> If True tool call parameters and results are added to the conversation as system messages.
         If this option is set to True, the langchain chain has to support a List[BaseMessage] input instead of a single AIMessage object.
 
         Tool Interrupts : 
-            A tool interrupt can be a regular tool call. 
-            A ToolInterrupt exception will be triggered with the function's results as a tool_result.
+            ToolInterrupts are specific events (the only events) that are triggered
+            whenever a tool in self.interruption has been called by the LLM.
+            The tool function is actually executed and its output is contained in the ToolInterrupt object.
 
-            A tool function can be specifically designed to trigger a ToolInterrupt by raising a ToolInterrupt exception from within.
-            The exception will be handled and raised by the invoke() function of LLMWithTools.
+            NOTE : This is designed to allow for extra processing of this tool call outside the LLMWithTool's invoke loop.
+            This is espacially useful when the tool is affecting other parts of the code, its execution is not self contained.
+            NOTE : You should be handling ToolInterrupt exceptions when you are registering interruptions.
         """
         self.tools = {tool.name: tool for tool in tools}
         self.interruptions = interruptions
@@ -85,7 +93,7 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
         while True:
             llm_response: AIMessage = self.llm.invoke(messages, config, **kwargs)
             messages.append(llm_response)
-            if hasattr(llm_response, 'tool_calls') and len(llm_response.tool_calls) > 0:
+            if hasattr(llm_response, 'tool_calls') and len(llm_response.tool_calls) > 0:  # FIXME : should be done without hasattr ideally (using some AIMessage guaranteed attribute)
                 for tool_call in llm_response.tool_calls:
                     tool_name = tool_call["name"].lower()
                     
@@ -122,4 +130,26 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
         stop: Optional[list[str]] = None,
         **kwargs: Any,
     ) -> BaseMessage:
-        ... # invoke but all the invoke are replaced by ainvoke
+        ... # invoke but all the tool invokes are run in the current loop whenever it's possible.
+        # regular invoke should be a simple asyncio run of this function instead of its current state.
+        # rethink the tool calling mechanism in here.
+
+    def stream(
+        self, 
+        input: LanguageModelInput, 
+        config: Optional[RunnableConfig] = None, 
+        *,
+        stop: Optional[list[str]] = None,
+        **kwargs: Any,
+    ) -> Generator[Union[str, StreamEvent], StreamFlags, None]:
+        pass
+
+    async def astream(
+        self, 
+        input: LanguageModelInput, 
+        config: Optional[RunnableConfig] = None, 
+        *,
+        stop: Optional[list[str]] = None,
+        **kwargs: Any,
+    ) -> AsyncGenerator[Union[str, StreamEvent], StreamFlags]:
+        pass

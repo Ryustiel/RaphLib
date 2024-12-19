@@ -8,19 +8,25 @@ import dotenv, langchain_core, pydantic_core, langchain, pydantic, langchain_ope
 from .prompts import ChatHistory, ChatMessage
 from .functions import LLMFunction, LLMFunctionResult, BatchLLMFunctionResult
 from .tools import LLMWithTools, ToolInterrupt
-from .helpers import balance_results, first_completed, escape_characters, LapTimer
+from .stables import StableModel
+from .helpers import LapTimer, balance_results, first_completed, escape_characters, get_all_fields_as_optional
 
 __all__ = [
     'ChatHistory', 
     'ChatMessage',
+
     'LLMFunction', 
     'LLMFunctionResult', 
     'BatchLLMFunctionResult', 
     'LLMWithTools', 
-    'ToolInterrupt', 
+
+    'StableModel',
     
+    'ToolInterrupt', 
+
     'balance_results',
     'first_completed',
     'escape_characters',
+    'get_all_fields_as_optional',
     'LapTimer',
 ]
