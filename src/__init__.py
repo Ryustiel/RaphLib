@@ -9,7 +9,15 @@ from .prompts import ChatHistory, ChatMessage
 from .functions import LLMFunction, LLMFunctionResult, BatchLLMFunctionResult
 from .tools import LLMWithTools, ToolInterrupt
 from .stables import StableModel
-from .helpers import LapTimer, balance_results, first_completed, escape_characters, get_all_fields_as_optional
+from .helpers import (
+    LapTimer, 
+    balance_results, 
+    first_completed, 
+    escape_characters, 
+    get_all_fields_as_optional, 
+    repair_json,
+    diff_dict,
+)
 
 __all__ = [
     'ChatHistory', 
@@ -28,5 +36,7 @@ __all__ = [
     'first_completed',
     'escape_characters',
     'get_all_fields_as_optional',
+    'repair_json',
+    'diff_dict',
     'LapTimer',
 ]

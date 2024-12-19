@@ -251,17 +251,11 @@ class LLMFunction(Runnable):
         self.raise_errors = raise_errors
         self.max_retries = max_retries
 
-        # Build streaming flags
-        self.is_streamable: bool = hasattr(llm, "stream")
-
         self.pydantic_model = pydantic_model
-        self.model_options = model_options
-        self.model = None
-        self.stable_model = None
-        self._build_model()  # TODO : This is a temporary hack
+        self._build_parser(model_options=model_options)
 
-        self.llm: Union[BaseChatModel, LLMWithTools] = llm  # NOTE : Can be changed to Runnable type if too specialized, but this would requires some adjustments to be work with running tools
-        self._build_prompt(prompt)
+        self.llm: Union[BaseChatModel, LLMWithTools] = llm  # NOTE : Can be changed to Runnable type if the current is too specialized, but this would requires some adjustments to be working with running tools in general
+        self._build_prompt(prompt=prompt)
 
         if use_format_instructions:  # Add format instructions to the prompt
             self._add_format_instructions()
@@ -297,26 +291,26 @@ class LLMFunction(Runnable):
             raise ValueError(f"Unsupported prompt format. Must be a ChatPromptTemplate, str, or list of tuples. Instead got {prompt}.")
     
 
-    def _build_model(self):
+    def _build_parser(self, model_options: Dict[str, Any]):
         """
         Builds a pydantic model and a parser from the provided options.
         This process is done once when the invoke method is first called.
         It never occurs when the LLMFunction is only used for streaming, because only a stable_model is needed.
         """
         if self.pydantic_model:
-            if len(self.model_options) >= 1:
-                raise ValueError(f"Provided {len(self.model_options)} model options and a pydantic model in the same time. Both options are mutually exclusive, it's either a prebuilt model or model options.")
+            if len(model_options) >= 1:
+                raise ValueError(f"Provided {len(model_options)} model options and a pydantic model in the same time. Both options are mutually exclusive, it's either a prebuilt model or model options.")
             # prebuilt pydantic model
             else:
-                self.model = self.pydantic_model
-                self.parser = DetailedOutputParser(pydantic_object=self.model)
+                model = self.pydantic_model
+                self.parser = DetailedOutputParser(pydantic_object=model)
         else:
-            self.model = pydantic_model_from_options(**self.model_options)
+            model = pydantic_model_from_options(**model_options)
             # fast single value output
-            if len(self.model_options) == 1 and next(iter(self.model_options.values())) is not str and next(iter(self.model_options.values())) != str:  # str values should be parsed as a json output.
-                self.parser = FastOutputParser(pydantic_object=self.model)
+            if len(model_options) == 1 and next(iter(model_options.values())) is not str and next(iter(model_options.values())) != str:  # str values should be parsed as a json output.
+                self.parser = FastOutputParser(pydantic_object=model)
             else:  # json composed output  
-                self.parser = DetailedOutputParser(pydantic_object=self.model)
+                self.parser = DetailedOutputParser(pydantic_object=model)
 
 
     def _prepare_local_prompt_and_input(self, input: Union[str, dict, PromptValue], kwargs: Optional[Dict[str, Any]]) -> Tuple[Dict[str, str], ChatHistory]:
@@ -434,7 +428,7 @@ class LLMFunction(Runnable):
 
             disable_parsing: if set to True, the LLMFunction will not parse the output into a StableModel. Instead, it will yield the raw output as a string.
         """
-        if not self.is_streamable: raise Exception("The LLM provided to the constructor of the LLMFunction does not support streaming.")
+        if not hasattr(self.llm, "astream"): raise Exception("The LLM provided to the constructor of the LLMFunction does not support asynchronous streaming.")
 
         input, local_prompt = self._prepare_local_prompt_and_input(input=input, kwargs=kwargs)
 
@@ -456,7 +450,7 @@ class LLMFunction(Runnable):
                         upstream = yield chunk.content
                     else:
                         upstream = yield chunk.content
-                        # upstream = yield self.stable_model(chunk)
+                        # upstream = yield self.parser.parse_chunk(chunk)
 
                     # TODO : Act upon upstream
 
@@ -596,25 +590,3 @@ class LLMFunction(Runnable):
         finally:
             return asyncio.run(self.arun_many(inputs=inputs, max_retries=max_retries, raise_errors=raise_errors, use_threading=use_threading, **kwargs))
         
-"""
-Streaming that makes sense : 
-- When streaming a tool call mixed with a chat, streams the text as an event, 
-then the pydantic objects as events, and potential "reset" events in case of the model fails and tries again with a structured output.
-- Tools can be made compatible with streaming if they're defined with a special "streamable" decorator. 
-They should then act like a "streamable pydantic" async generator.
-- The weight of the output parsing should be on the streamed object model. Use a base "streamable pydantic" object.
-- When streaming a structured response, sends the structured pydantic object repetitively, with missing fields.
-
-1. Create and test a homeostatic pydantic object
-2. Check if a target pydantic model (that is generated through our functions) can be "made partial" automatically.
-3. Check the streaming methods that come with langchain and implement them with the new pydantic streaming method (with the detailed output parser for now).
-4. Make it compatible with the fast output parser.
-5. Analyze the tool decorator and look for ways to make it compatible with streaming the tool output (if it's a structured object, otherwise just wait).
-6. Move the "stream messages" gimmick into its own separate method, so that the change in behavior and return type is clearer.
-7. Either way, the model will have to wait for the full tool output. At this point, let's make the LLMTool streaming event based. (Create a method for just that)
-
-A LLMFunction could take in a "LLMTool compatible LLM object", which has "multi output" enabled, and so return the multi output, with the parsed response as a... string ?
-Or maybe as a compound special output like "Chat Catchup" + "Structured Output"
-
-8. Implement the Chat Catchup object.
-"""
