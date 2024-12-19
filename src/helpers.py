@@ -205,7 +205,28 @@ RE_PATTERN_KEY_INCOMPELTE = re.compile(
     r'([\[{,]\s*"[^{}\[\]\"]*"?\s*:?\s*{?\s*}?\s*$)' # Match any {[, followed by a "key": like structure without a value. These patterns will be removed.
 )
 
+RE_PATTERN_GENERAL_LIST_FIX = re.compile(
+    r'[\[,](\s*"[^,"]*)$|([\[,]\s*\d*.)$'
+)
+
 EMPTY_JSON = "{}"
+
+def repair_list(trucated_list: str) -> str:
+    """
+    Fix any list, even lists of digits [1, 2, ...] and mixed lists [1, "2", ...]
+    """
+    if len(trucated_list) < 2:
+        return "[]"
+    elif trucated_list[-1] != "]":
+        match = RE_PATTERN_GENERAL_LIST_FIX.search(trucated_list)
+        if match:
+            trucated_list = trucated_list[:match.start()]
+            if len(trucated_list) < 2:
+                return "[]"
+        return trucated_list + "]"
+    else:
+        return trucated_list
+
 
 def repair_json(truncated_json: str) -> str:
         """

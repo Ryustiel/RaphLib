@@ -16,6 +16,7 @@ from .helpers import (
     escape_characters, 
     get_all_fields_as_optional, 
     repair_json,
+    repair_list,
     diff_dict,
 )
 
@@ -37,6 +38,7 @@ __all__ = [
     'escape_characters',
     'get_all_fields_as_optional',
     'repair_json',
+    'repair_list',
     'diff_dict',
     'LapTimer',
 ]

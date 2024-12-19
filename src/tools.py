@@ -19,7 +19,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from .helpers import escape_characters
 from .stream import StreamEvent, StreamFlags, ToolCallError, ToolCallInitialization, ToolCallResult
 
-class ToolInterrupt(Exception):
+class ToolInterrupt(BaseException):
     def __init__(self, tool_name: str, *args, **kwargs):
         self.tool_name: str = tool_name
         self.kwargs: dict = kwargs
