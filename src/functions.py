@@ -183,7 +183,7 @@ class FastOutputParser(OutputParser):
         """
         formatted_json = self._extract_json(text_input=partial_json)
         try:
-            return self.stable_pydantic_model.model_validate(formatted_json)
+            return self.stable_pydantic_model.model_validate_json(formatted_json)
         except ValidationError as e:
             return self.stable_pydantic_model()  # Return an empty version of the pydantic model as a default
 
@@ -357,14 +357,11 @@ class LLMFunction(Runnable):
                  llm: Runnable, 
                  prompt: Union[str, List[Tuple], ChatPromptTemplate] = None, 
                  max_retries: int = 2, 
-                 raise_errors: bool = True, 
                  use_format_instructions: bool = True,
                  pydantic_model: BaseModel = None, 
                  **model_options):
         
         if max_retries is None: raise ValueError("max_retries must be specified")
-
-        self.raise_errors = raise_errors
         self.max_retries = max_retries
 
         self.pydantic_model = pydantic_model
@@ -435,13 +432,27 @@ class LLMFunction(Runnable):
         return input, local_prompt
 
 
+    def invoke_with_errors(
+            self,
+            input: Union[str, dict, PromptValue] = None, 
+            max_retries: Optional[int] = None, 
+            **kwargs
+        ) -> LLMFunctionResult:
+        """
+        Run the invoke method, catches error and return a LLMFunctionResult object.
+        """
+        try:
+            self.invoke(input=input, max_retries=max_retries, **kwargs)
+        except Exception as e:
+            return LLMFunctionResult(success=False, result=str(e))
+
+
     def invoke(self, 
-               input: Union[str, dict, PromptValue] = None, 
+               input: Union[str, dict, PromptValue] = {}, 
                config: Optional[RunnableConfig] = None, 
                max_retries: Optional[int] = None, 
-               raise_errors: bool = None, 
                **kwargs
-            ) -> Union[BaseModel, LLMFunctionResult]:
+            ) -> BaseModel:
         """
             Runs the runnable, appends the errors, runs it again with the errors 
             until it is successful or max_retries is reached.
@@ -451,58 +462,35 @@ class LLMFunction(Runnable):
             raise_errors: if set to True raise the exception if all attempts failed, return the result itself as a Type[BaseModel].
                           if set to False, always return a LLMFunctionResult with a success bool and the result or an error.
         """
-        # PARSING ARGUMENTS
         input, local_prompt = self._prepare_local_prompt_and_input(input=input, kwargs=kwargs)
-
-        if raise_errors is None: raise_errors = self.raise_errors
         if max_retries is None: max_retries = self.max_retries
-
-        # RUNNING CHAIN WITH RETRY LOOP
         current_retry_count = 0
         error_messages = list()
 
-        result: BaseModel = None
         while current_retry_count < max_retries:
             if current_retry_count > 0:
                 logging.warning(f"Retrying : Attempt nb. {current_retry_count+1}")
 
             try:
-                result = (local_prompt | self.llm | self.parser).invoke(input)
-                break  # If no error, break the loop.
-
-            except ValidationError as err:  # TODO : Use ValueError instead
-                error = str(err)
-                local_prompt.append("system", error)
-                error_messages.append(error)
+                return (local_prompt | self.llm | self.parser).invoke(input)
 
             except ToolInterrupt as interruption:
                 raise interruption  # Interrupt and pass on the tool interrupt event, regardless of the raise_errors flag.
-            
-            except Exception as err:  # Handle other exceptions here
-                if raise_errors: raise err
-                else: return LLMFunctionResult(False, err)
 
-            if current_retry_count >= max_retries:
-                err = Exception(f"{error_messages}\n\nRetried too many times : {current_retry_count} times.")
-                if raise_errors: 
-                    raise err
-                else: 
-                    return LLMFunctionResult(False, err)
+            except ValidationError as err:  # TODO : Use ValueError instead
+                local_prompt.append("system", str(err))
+                error_messages.append(str(err))
 
             current_retry_count += 1
 
-        # the flag "raise_errors" also affects the return type of a valid result 
-        if raise_errors: 
-            return result
-        else: 
-            return LLMFunctionResult(True, result)
+        raise Exception(f"{error_messages}\n\nRetried too many times : {current_retry_count} times.")
         
 
     async def astream(self, 
-               input: Union[str, dict, PromptValue] = None, 
+               input: Union[str, dict, PromptValue] = {}, 
                config: Optional[RunnableConfig] = None, 
-               max_retries: int = 1, 
-               raise_errors: bool = None, 
+               max_retries: Optional[int] = None, 
+               delta_mode: bool = False,
                disable_parsing: bool = False,
                **kwargs
             ) -> AsyncGenerator[Union[StableModel, StreamEvent], StreamFlags]:
@@ -517,70 +505,66 @@ class LLMFunction(Runnable):
                          if set to an int, streaming might return a ResetStream flag that indicates that 
                          the content stream is beginning anew starting from the next item. External scripts typically want to reset their buffers.
 
-            raise_errors: if set to True raise the exception if all attempts failed, yield stream items directly a Type[StableModel] or a (textdelta) str.
-                          if set to False, always return a LLMFunctionResult with a success bool and the result or an error.
-
             disable_parsing: if set to True, the LLMFunction will not parse the output into a StableModel. Instead, it will yield the raw output as a string.
+
+            delta_model: if set to True, return the difference in content between the previous chunk and the current chunk as a StableModel. 
+            The last streamed packed will contain all of the buffered data instead of the difference, so as to be used as a reference. 
+            If set to False always stream all of the buffered data.
         """
         if not hasattr(self.llm, "astream"): raise Exception("The LLM provided to the constructor of the LLMFunction does not support asynchronous streaming.")
-
         input, local_prompt = self._prepare_local_prompt_and_input(input=input, kwargs=kwargs)
-
-        if raise_errors is None: raise_errors = self.raise_errors
         if max_retries is None: max_retries = self.max_retries
-
-        # RUNNING CHAIN WITH RETRY LOOP
         current_retry_count = 0
         error_messages = list()
+        previous_result = self.parser.stable_pydantic_model()  # Used for delta mode
 
         while current_retry_count < max_retries:
             if current_retry_count > 0:
                 logging.warning(f"Retrying : Attempt nb. {current_retry_count+1}")
 
             try:
-                buffer = ""
-                for chunk in (local_prompt | self.llm).stream(input):
-                    # chunk: BaseMessage
-                    if disable_parsing:
-                        upstream = yield chunk.content
-                    else:
-                        buffer += chunk.content
-                        upstream = yield buffer
-                        # upstream = yield self.parser.parse_partial(buffer)
+                buffer: str = ""
+                async for event in (local_prompt | self.llm).astream(input):
+                    if isinstance(event, BaseMessage):
+                        if disable_parsing:
+                            upstream = yield event.content
+                        else:
+                            buffer += event.content
+                            if delta_mode:
+                                new_result = self.parser.parse_partial(buffer)
+                                upstream = yield previous_result.delta_from_newer(newer_model=new_result)
+                                previous_result = new_result
+                            else:
+                                upstream = yield self.parser.parse_partial(buffer)
 
-                    # TODO : Act upon upstream
+                        # TODO : Act upon upstream
+                    else:
+                        return event
+
+                if delta_mode:  # Yield the full buffer as the last message
+                    yield self.parser.parse_partial(buffer)
 
                 break  # End of streaming reached : Success
 
             except ToolInterrupt as interruption:
                 raise interruption  # Interrupt and pass on the tool interrupt event, regardless of the raise_errors flag.
-            
-            except Exception as err:
-                if raise_errors: 
-                    raise err
 
-                else: 
-                    upstream = yield ResetStream(error=str(err))
-
-                    # TODO : Act upon upstream
-
-                current_retry_count += 1
-
-        if current_retry_count >= max_retries:
-            err = Exception(f"{error_messages}\n\nRetried too many times : {current_retry_count} times.")
-            if raise_errors: 
-                raise err
-            else: 
+            except ValidationError as err:
+                local_prompt.append("system", str(err))
+                error_messages.append(str(err))
                 yield ResetStream(error=str(err))
 
-        # else : Streaming was successful
+            current_retry_count += 1
+
+        Exception(f"{error_messages}\n\nRetried too many times : {current_retry_count} times.")
 
 
     def stream(self, 
-               input: Union[str, dict, PromptValue] = None, 
+               input: Union[str, dict, PromptValue] = {}, 
                config: Optional[RunnableConfig] = None, 
-               max_retries: int = 1, 
-               raise_errors: bool = None, 
+               max_retries: Optional[int] = None, 
+               delta_mode: bool = False,
+               disable_parsing: bool = False,
                **kwargs
             ) -> Generator[Union[StableModel, StreamEvent], StreamFlags, None]:
         """
@@ -593,11 +577,8 @@ class LLMFunction(Runnable):
             max_retries: if set to None streams normally.
                          if set to an int, streaming might return a ResetStream flag that indicates that 
                          the content stream is beginning anew starting from the next item. External scripts typically want to reset their buffers.
-
-            raise_errors: if set to True raise the exception if all attempts failed, yield stream items directly a Type[StableModel] or a (textdelta) str.
-                          if set to False, always return a LLMFunctionResult with a success bool and the result or an error.
         """
-        async_gen_instance = self.astream(input=input, config=config, max_retries=max_retries, raise_errors=raise_errors, **kwargs)  # Initialize the async generator
+        async_gen_instance = self.astream(input=input, config=config, delta_mode=delta_mode, disable_parsing=disable_parsing, max_retries=max_retries, **kwargs)  # Initialize the async generator
         try:
             loop = asyncio.get_event_loop()
             while True:
@@ -609,12 +590,13 @@ class LLMFunction(Runnable):
     async def arun_many(self, 
                         inputs: List[Dict] = None, 
                         max_retries: int = None, 
-                        raise_errors=None, 
+                        raise_errors=True, 
                         use_threading=False, 
                         **kwargs
                     ) -> Union[List[BaseModel], BatchLLMFunctionResult]:
         """
         Run a batch call (many invoke() in parallel) using the current template, llm and model with a batch of input parameters.
+        NOTE : This Method has the advantage of being compatible with Threading.
 
         /!\\ input values can be passed as the [insp] list or as [keyword arguments].
         Because we are processing a batch, <inputs> should be a List[Dict].
@@ -622,7 +604,6 @@ class LLMFunction(Runnable):
         In other words, each keyword argument is the list of the arguments of that specific input keyword for each item of the batch.
         We should have the same value for each (len(arg) for arg in kwargs).
         """
-        if raise_errors is None: raise_errors = self.raise_errors
         if max_retries is None: max_retries = self.max_retries
 
         if inputs:
@@ -673,11 +654,14 @@ class LLMFunction(Runnable):
     def run_many(self, 
                  inputs: List[Dict]=None, 
                  max_retries: int=None, 
-                 raise_errors=None, 
+                 raise_errors=True, 
                  use_threading=False, 
                  **kwargs
             ) -> Union[List[BaseModel], BatchLLMFunctionResult]:
-        """ Synchronous wrapper around arun_many()."""
+        """
+        Synchronous wrapper around arun_many().
+        NOTE : This Method has the advantage of being compatible with Threading.
+        """
         try:
             if asyncio.get_event_loop().is_running():  # Running inside an async loop
                 future = asyncio.ensure_future(self.arun_many(inputs=inputs, max_retries=max_retries, raise_errors=raise_errors, use_threading=use_threading, **kwargs))

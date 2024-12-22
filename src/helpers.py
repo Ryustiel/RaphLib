@@ -243,10 +243,13 @@ def repair_json(truncated_json: str) -> str:
         else:
             # Step 1: Remove any json``` pattern that is recurrent on those outputs. This is only for json outputs.
             if repaired_json[0] == '`':
-                if len(repaired_json) < 7:
+                if len(repaired_json) < 8:
                     return EMPTY_JSON
                 else:
                     repaired_json = repaired_json[7:]  # Cut off the json``` structure
+            
+            if repaired_json[-1] == '.':
+                repaired_json  = repaired_json[:-1]
 
             # Step 2: Remove any trailing non string value that might be incomplete
             # These are digits strings (including float points) or incomplete keywords such as bool or null (that don't start with a comma)

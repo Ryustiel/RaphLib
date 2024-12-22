@@ -135,7 +135,16 @@ def extract_fields(**example) -> Dict[str, Any]:
 
 def pydantic_model_from_options(**example) -> BaseModel:
     """
-    INFO : You can't mix types in literals defined through this function.
+    Create a new pydantic model using the field options provided as kwargs.
+    The options should have the shape of {<field name> : <example>}
+    Where an <example> is either a type (str, int, float, List[str], ...) 
+    or an instance of the type ("blah", 8.3, ["blah", "bluh"], ...)
+    
+    NOTE : You can define literal inputs by providing the values as <literal field>=[<value1>, <value2>, ...]
+    If your example list contains an ellipsis then it will be 
+    interpreted as an example for a List type instead of a Literal.
+
+    NOTE : You can't mix types in literals defined through this function.
     All models with literals should be created through this function so they have this property as well.
     """
     fields = extract_fields(**example)
