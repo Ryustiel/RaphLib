@@ -1,17 +1,60 @@
 import re
 import time
 import asyncio
-from typing import List, Optional, Union, Any, Awaitable, Type, Dict, Any, get_args, get_origin
+import threading
+
+from typing import (
+    List, 
+    Optional, 
+    Union, 
+    Any, 
+    Awaitable, 
+    Type,
+    Dict, 
+    Any, 
+    get_args, 
+    get_origin
+)
 from pydantic import BaseModel, create_model
 from pydantic.fields import FieldInfo
+
+# ================================================================ SYNCHRONIZE
+
+# Utility function for deasync compatibility
+def start_event_loop(loop: asyncio.BaseEventLoop):
+    """Run an asyncio event loop in a separate thread."""
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+def run_in_parallel_event_loop(future: asyncio.Future) -> Any:
+    """
+    Run the coroutine in a separate thread and return the result.
+
+    NOTE : This is designed to handle calling async functions from within a synchronous function nested in an asynchronous call.
+    (So Async => Sync => Async)
+    """
+    # Create a new event loop and thread
+    loop = asyncio.new_event_loop()  # Keep a reference to the loop for later
+    thread = threading.Thread(target=start_event_loop, args=(loop,), daemon=True)
+    thread.start()
+
+    try:
+        # Submit coroutine to the event loop running in another thread
+        future = asyncio.run_coroutine_threadsafe(coro=future, loop=loop)
+        result = future.result()  # This blocks until the coroutine completes
+    finally:
+        # Cleanup: Stop the event loop and join the thread
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join()  # Waiting for the loop to stop
+        return result
+
+
+# ================================================================= ESCAPE CHARACTERS
 
 ESCAPE_MAP = {
         '{': '{{',
         '}': '}}',
     }
-
-
-# ================================================================= ESCAPE CHARACTERS
 
 def escape_characters(text: str) -> str:
 

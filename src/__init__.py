@@ -7,8 +7,9 @@ import dotenv, langchain_core, pydantic_core, langchain, pydantic, langchain_ope
 
 from .prompts import ChatHistory, ChatMessage
 from .functions import LLMFunction, LLMFunctionResult, BatchLLMFunctionResult
-from .tools import LLMWithTools, ToolInterrupt, StreamableBaseTool
+from .tools import LLMWithTools, ToolInterrupt, BaseTool
 from .stables import StableModel, pydantic_model_from_options
+from .stream import StreamEvent, ResetStream, ToolCallEvent, ToolCallError, ToolCallInitialization, ToolCallStream, TextResponseChunk
 from .helpers import (
     LapTimer, 
     balance_results, 
@@ -18,6 +19,7 @@ from .helpers import (
     repair_json,
     repair_list,
     diff_dict,
+    run_in_parallel_event_loop,
 )
 
 __all__ = [
@@ -32,15 +34,24 @@ __all__ = [
     'StableModel',
     
     'ToolInterrupt', 
-    'StreamableBaseTool',
+    'BaseTool',
     'pydantic_model_from_options',
 
     'balance_results',
     'first_completed',
     'escape_characters',
     'get_all_fields_as_optional',
+    'run_in_parallel_event_loop',
     'repair_json',
     'repair_list',
     'diff_dict',
     'LapTimer',
+
+    'StreamEvent', 
+    'ResetStream', 
+    'ToolCallEvent', 
+    'ToolCallError', 
+    'ToolCallInitialization', 
+    'ToolCallStream',
+    'TextResponseChunk',
 ]
