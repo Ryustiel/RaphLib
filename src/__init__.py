@@ -9,7 +9,16 @@ from .prompts import ChatHistory, ChatMessage
 from .functions import LLMFunction, LLMFunctionResult, BatchLLMFunctionResult
 from .tools import LLMWithTools, ToolInterrupt, BaseTool
 from .stables import StableModel, pydantic_model_from_options
-from .stream import StreamEvent, ResetStream, ToolCallEvent, ToolCallError, ToolCallInitialization, ToolCallStream, TextResponseChunk
+from .stream import (
+    StreamEvent, 
+    ResetStream, 
+    ToolCallEvent, 
+    ToolCallError, 
+    ToolCallInitialization, 
+    ToolCallStream, 
+    AITextResponseChunk, 
+    AITextResponse,
+)
 from .helpers import (
     LapTimer, 
     balance_results, 
@@ -53,5 +62,6 @@ __all__ = [
     'ToolCallError', 
     'ToolCallInitialization', 
     'ToolCallStream',
-    'TextResponseChunk',
+    'AITextResponseChunk',
+    'AITextResponse',
 ]

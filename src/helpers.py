@@ -46,7 +46,8 @@ def run_in_parallel_event_loop(future: asyncio.Future) -> Any:
         # Cleanup: Stop the event loop and join the thread
         loop.call_soon_threadsafe(loop.stop)
         thread.join()  # Waiting for the loop to stop
-        return result
+        
+    return result
 
 
 # ================================================================= ESCAPE CHARACTERS
@@ -252,6 +253,10 @@ RE_PATTERN_GENERAL_LIST_FIX = re.compile(
     r'[\[,](\s*"[^,"]*)$|([\[,]\s*\d*.)$'
 )
 
+RE_JSON_CLOSING_PATTERN = re.compile(
+    r'[`]+[^a-zA-Z\d]*$'
+)
+
 EMPTY_JSON = "{}"
 
 def repair_list(trucated_list: str) -> str:
@@ -355,9 +360,10 @@ def repair_json(truncated_json: str) -> str:
                 opening = stack.pop()
                 repaired_json += closing_brackets.get(opening, '')
 
-            # Step 8: Remove the closing `
-            while len(repaired_json) > 0 and repaired_json[-1] == "`":  # popping ` out
-                repaired_json = repaired_json[:-1]
+            # Step 8: Remove the closing ` and line breaks at the end
+            match = RE_JSON_CLOSING_PATTERN.search(repaired_json)
+            if match:
+                repaired_json = repaired_json[:match.start()]
 
             return repaired_json
             

@@ -14,14 +14,14 @@ from pydantic import BaseModel
 
 from langchain_core.tools import StructuredTool
 from langchain_core.prompt_values import ChatPromptValue
-from langchain_core.messages import BaseMessage, AIMessage, SystemMessage, ToolMessage, AIMessageChunk
+from langchain_core.messages import BaseMessage, AIMessage, SystemMessage, ToolMessage
 from langchain_core.runnables.base import Runnable
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from .helpers import escape_characters, run_in_parallel_event_loop
-from .stream import BaseTool, StreamEvent, TextResponseChunk, StreamFlags, ToolCallError, ToolCallInitialization, ToolCallResult
+from .stream import BaseTool, StreamEvent, AITextResponseChunk, AITextResponse, StreamFlags, ToolCallError, ToolCallInitialization, ToolCallResult
 
 class ToolInterrupt(BaseException):
     def __init__(self, tool_name: str, *args, **kwargs):
@@ -100,7 +100,7 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
         sync_mode: bool = False,
         stream_text: bool = True,
         **kwargs
-    ) -> AsyncGenerator[BaseMessage|StreamEvent, StreamFlags]:
+    ) -> AsyncGenerator[AITextResponse|StreamEvent, StreamFlags]:
         """
         Stream the llm output as well as special events when tools are called.
 
@@ -121,23 +121,22 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
             if sync_mode:
                 if stream_text:
                     # Streaming llm output unless it's a ToolCall
-                    llm_response = AIMessageChunk(content='')
+                    llm_response = AITextResponse(content='')
                     for chunk in self.llm.stream(messages, config, **kwargs):
                         llm_response += chunk
                         if chunk.content:
-                            yield TextResponseChunk(content=chunk.content)  # Yield the text content of this chunk
+                            yield AITextResponseChunk(content=chunk.content)  # Yield the text content of this chunk
                 else:
                     llm_response: AIMessage = self.llm.invoke(messages, config, **kwargs)
             else:
                 if stream_text:
-                    llm_response = AIMessageChunk(content='')
+                    llm_response = AITextResponse(content='')
                     async for chunk in self.llm.astream(messages, config, **kwargs):
                         llm_response += chunk
                         if chunk.content:
-                            yield TextResponseChunk(content=chunk.content)  # Yield the text content of this chunk
+                            yield AITextResponseChunk(content=chunk.content)  # Yield the text content of this chunk
                 else:
-                    async for chunk in self.llm.astream(messages, config, **kwargs):
-                        llm_response: AIMessage = await self.llm.ainvoke(messages, config, **kwargs)
+                    llm_response: AIMessage = await self.llm.ainvoke(messages, config, **kwargs)
 
             messages.append(llm_response)
 
@@ -178,7 +177,7 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
                         if n_consecutive_errors >= self.max_retries:
                             # Create a special error message for exceptions that are unrelated to the tool execution.
                             # NOTE : Exceptions related to the execution of the tool itself are handled using ToolCallError objects, handled in the loop above.
-                            yield self._create_error_tracking_message(tool_call, str(e))
+                            yield ToolCallError(content=self._create_error_tracking_message(tool_call, str(e)))
                         else:
                             n_consecutive_errors += 1
             else:
@@ -202,8 +201,12 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
         async_gen_instance = self.astream(input=input, config=config, stream_text=stream_text, sync_mode=True, **kwargs)
         try:
             loop = asyncio.get_event_loop()
-            while True:
-                yield loop.run_until_complete(async_gen_instance.__anext__())
+            if loop.is_running():
+                while True:
+                    yield run_in_parallel_event_loop(future=async_gen_instance.__anext__())
+            else:
+                while True:
+                    yield loop.run_until_complete(future=async_gen_instance.__anext__())
         except StopAsyncIteration:
             pass
 
@@ -221,7 +224,6 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
         lastest_exception: Optional[ToolCallError] = None
         latest_response: Optional[AIMessage] = None
         async for event in self.astream(input=input, config=config, sync_mode=sync_mode, stream_text=False, **kwargs):
-            print("RECEIVED EVENT", type(event))
             if isinstance(event, ToolCallError):
                 # Store the exception for returning in case of no result is generated
                 lastest_exception = event

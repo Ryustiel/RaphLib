@@ -27,7 +27,7 @@ from langchain_core.prompt_values import PromptValue
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from .helpers import escape_characters, run_in_parallel_event_loop
-from .stream import StreamEvent, ResetStream, TextResponseChunk, StreamFlags
+from .stream import StreamEvent, ResetStream, AITextResponseChunk, AITextResponse, StreamFlags
 from .prompts import ChatHistory
 from .tools import ToolInterrupt, LLMWithTools
 from .stables import StableModel
@@ -195,10 +195,11 @@ class LLMFunction(Runnable):
             return LLMFunctionResult(success=False, result=str(e))
 
 
-    def invoke(self, 
+    async def ainvoke(self, 
                input: Union[str, dict, PromptValue] = {}, 
                config: Optional[RunnableConfig] = None, 
                max_retries: Optional[int] = None, 
+               sync_mode: bool = False,
                **kwargs
             ) -> BaseModel:
         """
@@ -220,7 +221,10 @@ class LLMFunction(Runnable):
                 logging.warning(f"Retrying : Attempt nb. {current_retry_count+1}")
 
             try:
-                return (local_prompt | self.llm | self.parser).invoke(input)
+                if sync_mode:
+                    return (local_prompt | self.llm | self.parser).invoke(input)
+                else:
+                    return await (local_prompt | self.llm | self.parser).ainvoke(input)
 
             except ToolInterrupt as interruption:
                 raise interruption  # Interrupt and pass on the tool interrupt event, regardless of the raise_errors flag.
@@ -232,7 +236,20 @@ class LLMFunction(Runnable):
             current_retry_count += 1
 
         raise Exception(f"{error_messages}\n\nRetried too many times : {current_retry_count} times.")
-        
+    
+
+    
+    def invoke(self, 
+        input: Union[str, dict, PromptValue] = {}, 
+        config: Optional[RunnableConfig] = None, 
+        max_retries: Optional[int] = None, 
+        **kwargs
+    ) -> BaseModel:
+        if asyncio.get_event_loop().is_running():
+            return run_in_parallel_event_loop(future=self.ainvoke(input=input, config=config, max_retries=max_retries, sync_mode=True, **kwargs))
+        else:
+            return asyncio.run(main=self.ainvoke(input=input, config=config, max_retries=max_retries, sync_mode=True, **kwargs))
+
 
     def _handle_stream_event(
             self, 
@@ -241,10 +258,27 @@ class LLMFunction(Runnable):
             previous_result: StableModel,
             disable_parsing: bool, 
             delta_mode: bool, 
-        ) -> Tuple[StableModel|StreamEvent, StableModel, str]:
+        ) -> Tuple[str|StableModel|StreamEvent, StableModel, str]:
+        """
+        Regardless of parameters, events that are StreamEvents are simply streamed back as Tuple[1]
+
+        If disable_parsing is True, return a str.
+        Otherwise return a StableModel.
+
+        disable_parsing = True => delta_mode ignored.
+        """
         
-        if isinstance(event, (BaseMessage, TextResponseChunk, AIMessageChunk)):
+        if isinstance(event, AITextResponse):
+            if disable_parsing:
+                return event, previous_result, buffer  # Confirmation event = just stream the event
+            else:
+                # Ignore delta mode, buffer and all, just take the "result" message as it is and parse it into a result
+                new_result = self.parser.parse_partial(event.content)
+                return new_result, previous_result, buffer
+
+        elif isinstance(event, (AITextResponseChunk, AIMessageChunk)):
             buffer += event.content
+            
             if disable_parsing:
                 return event.content, previous_result, buffer
             else:
@@ -332,8 +366,9 @@ class LLMFunction(Runnable):
                 raise interruption  # Interrupt and pass on the tool interrupt event, regardless of the raise_errors flag.
 
             except ValidationError as err:
-                local_prompt.append("system", str(err))
-                error_messages.append(str(err))
+                local_prompt.append("system", str(err))  # Add error to the local prompt so that the LLM won't make the same error
+                error_messages.append(str(err))  # Keep track of the error so that they can be returned at the end
+                logging.error("\n\nERROR\n\n", str(err), "\n\nBUFFER STATE\n\n", buffer, "\n\n")
                 yield ResetStream(error=str(err))
 
             current_retry_count += 1
@@ -373,10 +408,11 @@ class LLMFunction(Runnable):
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 while True:
-                    yield run_in_parallel_event_loop(async_gen_instance.__anext__())
+                    yield run_in_parallel_event_loop(future=async_gen_instance.__anext__())
             else:
                 while True:
-                    yield loop.run_until_complete(main=async_gen_instance.__anext__())
+                    yield loop.run_until_complete(future=async_gen_instance.__anext__())
+
         except StopAsyncIteration:
             pass
 

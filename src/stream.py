@@ -17,6 +17,7 @@ from abc import ABC, abstractmethod
 from pydantic import BaseModel, Field, create_model
 from pydantic_core import ValidationError
 from langchain_core.tools import BaseTool as LangchainBaseTool
+from langchain_core.messages import BaseMessage, AIMessageChunk
 from langchain_core.messages import ToolCall
 
 from .helpers import run_in_parallel_event_loop
@@ -38,12 +39,19 @@ class ResetStream(StreamEvent):
     """
     error: str
 
-class TextResponseChunk(StreamEvent):
+class AITextResponseChunk(StreamEvent):
     """
     Contains bits of the text response of the model.
     Should be deleted if the ResetStream event is received.
     """
     content: str
+
+class AITextResponse(AIMessageChunk):
+    """
+    Represents completed AIMessageChunks that a LLMWithTools has emitted.
+    Behaves like an AIMessage.
+    """
+    pass
 
 class ToolCallEvent(StreamEvent):
     """

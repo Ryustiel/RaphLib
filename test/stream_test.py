@@ -3,7 +3,7 @@ from raphlib.fastkit import get_llm
 
 LLM = get_llm('gpt-4o')
 
-from raphlib import BaseTool, LLMWithTools, StreamEvent, TextResponseChunk, pydantic_model_from_options
+from raphlib import BaseTool, LLMWithTools, StreamEvent, AITextResponseChunk, pydantic_model_from_options
 from typing import Type
 
 class TemplateTool(BaseTool):
@@ -18,7 +18,7 @@ class TemplateTool(BaseTool):
 TESTLLM = LLMWithTools(LLM, [TemplateTool()])
 
 for event in TESTLLM.stream("Tell me about the information from the tool, pick pear."):
-    if isinstance(event, TextResponseChunk):
+    if isinstance(event, AITextResponseChunk):
         print(event.content)
     elif not isinstance(event, StreamEvent):
         print("\n\nRESPONSE\n\n", event.content)
