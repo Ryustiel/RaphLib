@@ -50,11 +50,3 @@ for event in func.stream({"lyrics": "I like potatoes"}):
     else:
         print(type(event).__name__)
     time.sleep(0.001)  # Make the output more readable by adding a delay
-
-# => Faire des changements sur MeepInterface qui sera lui même une instance de tool (hérite de raphlib.stream.BaseTool)
-# => Puis connecter discord
-# => Et ajouter le support des flags
-# => Faire fonctionner les menus
-# => Puis ajouter le système de références dans MeepChatHistory
-# => Puis Implémenter la streaming interface dans Meep et faire que ça marche avec un nouveau tool ou endpoint dans discord
-# => Puis reprendre le travail sur la mémoire en réparant le bug
