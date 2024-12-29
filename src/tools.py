@@ -94,6 +94,22 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
         elif isinstance(event, ToolCallError):
             messages.append(SystemMessage(content=event.content))
 
+    def add_tools(self, tools: List[BaseTool] = [], interruptions: List[str] = []):
+        """
+        Add the provided tools to the list.
+        If a tool with a similar name already exists replace it with the provided one.
+        """
+        self.tools.update({tool.name: tool for tool in tools})
+        self.interruptions.extend(interruptions)
+
+    def overwrite_tools(self, tools: List[List[BaseTool]] = [], interruptions: List[str] = []):
+        """
+        Overwrite the tools and iterruptions with the provided lists.
+        If no parameters are passed, simply reset all the tools.
+        """
+        self.tools = {tool.name: tool for tool in tools}
+        self.interruptions = interruptions
+
     async def astream(self,
         input: LanguageModelInput, 
         config: Optional[RunnableConfig] = None, 
