@@ -541,7 +541,7 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         return ChatHistory(messages=new_messages, types=self.types.copy())
 
     def invoke(self, input: dict, config: Optional[RunnableConfig] = None, **kwargs) -> PromptValue:
-        return ChatPromptTemplate(self.as_message_like()).invoke(input, config, **kwargs)
+        return ChatPromptTemplate(messages=self.as_message_like()).invoke(input, config, **kwargs)
     
     def to_str(self):
         """
