@@ -1,7 +1,7 @@
 success = False
 try:
     from src import *
-except Exception as e:
+except ModuleNotFoundError as e:
     try:
         from .src import *
         success = True
