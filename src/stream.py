@@ -91,10 +91,10 @@ class BaseTool(LangchainBaseTool, ABC):
     If the stream method is not further implemented in the subclass, streaming will yield a single "response" event.
     arun is derived from the run method by default and vice versa. At least one of them should be implemented.
     
-    General information on building tool : 
-    1. Write a str "name" and a str "description" attributes.
+    HOW TO BUILD A TOOL (SUBCLASS THIS) : 
+    1. Specify a str "name" and a str "description" attribute.
     2. Add an args_schema pydantic model that will determine the input schema of the tool.
-    3. Create at least an [async _arun(input)] method. You can also implement the _run, _stream, and _astream methods.
+    3. Create at least an [async _arun(input)] method. You can also implement the extras _run, _stream, and _astream methods.
     
     NOTE : Input will contain a pydantic model with the input schema.
     NOTE : Unimplemented run and stream methods will link back to the _arun() method. 
@@ -112,14 +112,16 @@ class BaseTool(LangchainBaseTool, ABC):
     """
     name: str
     description: str
-    args_schema: Type[BaseModel]
+    args_schema: Optional[Type[BaseModel]] = None  # Empty args schema is an "Any" type of input
 
-    def _extract_parameters(self, mixed_parameters: Union[str, dict, ToolCall]) -> BaseModel:
+    def _extract_parameters(self, mixed_parameters: Optional[Union[str, dict, ToolCall]]) -> Optional[BaseModel]:
         """
         Turn the parameters into a homogeneous pydantic model to be used by the actual tool methods.
         This function can contain parsing errors.
         """
-        if isinstance(mixed_parameters, str):
+        if self.args_schema is None:  # Ignores any input parameters
+            return None
+        elif isinstance(mixed_parameters, str):
             return self.args_schema.model_validate_json(mixed_parameters)
         elif isinstance(mixed_parameters, dict):
             if 'args' in mixed_parameters.keys():
@@ -160,7 +162,7 @@ class BaseTool(LangchainBaseTool, ABC):
 
     # ================================================================= GATEWAY METHODS
 
-    async def arun(self, mixed_parameters: Union[str, Dict[str, Any], ToolCall])  -> (ToolCallResult|ToolCallError):
+    async def arun(self, mixed_parameters: Optional[Union[str, Dict[str, Any], ToolCall]] = None)  -> (ToolCallResult|ToolCallError):
         """
         Execute the tool and return the output or errors
         """
@@ -173,9 +175,9 @@ class BaseTool(LangchainBaseTool, ABC):
                 content = result
             )
         except Exception as e:
-            return ToolCallError(error_message=f"An exception occurred when calling the tool {self.name} : {str(e)}")
+            return ToolCallError(content=f"An exception occurred when calling the tool {self.name} : {str(e)}")
 
-    def run(self, mixed_parameters: Union[str, Dict[str, Any], ToolCall]) -> (ToolCallResult|ToolCallError):
+    def run(self, mixed_parameters: Optional[Union[str, Dict[str, Any], ToolCall]] = None) -> (ToolCallResult|ToolCallError):
         """
         Execute the tool and return the output or errors.
         """
@@ -188,9 +190,9 @@ class BaseTool(LangchainBaseTool, ABC):
                 content = result
             )
         except Exception as e:
-            return ToolCallError(error_message=f"An exception occurred when calling the tool {self.name} : {str(e)}")
+            return ToolCallError(content=f"An exception occurred when calling the tool {self.name} : {str(e)}")
 
-    async def astream(self, mixed_parameters: Union[str, Dict[str, Any], ToolCall]) -> AsyncGenerator[ToolCallEvent, None]:
+    async def astream(self, mixed_parameters: Optional[Union[str, Dict[str, Any], ToolCall]] = None) -> AsyncGenerator[ToolCallEvent, None]:
         """
         Streams the tool output as stream events, asynchronously (errors, partial responses, full response).
         """
@@ -204,9 +206,9 @@ class BaseTool(LangchainBaseTool, ABC):
                 yield ToolCallStream(content=event)
             yield ToolCallResult(content=buffer)
         except Exception as e:
-            yield ToolCallError(error_message=f"An exception occurred when calling the tool {self.name} : {str(e)}")
+            yield ToolCallError(content=f"An exception occurred when calling the tool {self.name} : {str(e)}")
 
-    def stream(self, mixed_parameters: Union[str, Dict[str, Any], ToolCall]) -> Generator[ToolCallEvent, None, None]:
+    def stream(self, mixed_parameters: Optional[Union[str, Dict[str, Any], ToolCall]] = None) -> Generator[ToolCallEvent, None, None]:
         """
         Streams the tool output as stream events (errors, partial responses, full response).
         """
@@ -220,4 +222,10 @@ class BaseTool(LangchainBaseTool, ABC):
                 yield ToolCallStream(content=event)
             yield ToolCallResult(content=buffer)
         except Exception as e:
-            yield ToolCallError(error_message=f"An exception occurred when calling the tool {self.name} : {str(e)}")
+            yield ToolCallError(content=f"An exception occurred when calling the tool {self.name} : {str(e)}")
+
+    def __str__(self):
+        if self.args_schema is None:
+            return f"\n=== Tool\nName: \n{self.name}\n\nModel: \nNo Input\n\nDescription: \n{self.description}\n=== End Tool"
+        else:
+            return f"\n=== Tool\nName: \n{self.name}\n\nModel: \n{self.args_schema.__name__} > {self.args_schema.__fields__}\n\nDescription: \n{self.description}\n=== End Tool"

@@ -84,15 +84,6 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
             Tool call: {tool_call['name']} {escape_characters(str(tool_call['args']))}\n
             Error: {escape_characters(str(error))}
         """
-    
-    def _update_messages(self, messages: List[BaseMessage], tool_call_id: str, event: StreamEvent|AIMessage) -> List[BaseMessage]:
-        """
-        Updates the messages list depending on the event.
-        """
-        if isinstance(event, ToolCallResult):
-            messages.append(ToolMessage(content=event.content, tool_call_id=tool_call_id))
-        elif isinstance(event, ToolCallError):
-            messages.append(SystemMessage(content=event.content))
 
     def add_tools(self, tools: List[BaseTool] = [], interruptions: List[str] = []):
         """
@@ -101,6 +92,7 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
         """
         self.tools.update({tool.name: tool for tool in tools})
         self.interruptions.extend(interruptions)
+        self.llm: BaseChatModel = self.llm.bind_tools(tools)
 
     def overwrite_tools(self, tools: List[List[BaseTool]] = [], interruptions: List[str] = []):
         """
@@ -156,46 +148,59 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
 
             messages.append(llm_response)
 
+            stop_processing_tools_flag = False  # Set to True when encountering a stopping condition
+            interrupt: Optional[ToolInterrupt] = None
+
             if hasattr(llm_response, 'tool_calls') and len(llm_response.tool_calls) > 0:  # FIXME : should be done without hasattr ideally (using some AIMessage guaranteed attribute)
-                for tool_call in llm_response.tool_calls:
+                for tool_call in llm_response.tool_calls:  # NOTE : All tools must be processed and provided a response, even if it's an error.
                     tool_name = tool_call["name"].lower()
                     yield ToolCallInitialization(tool_name=tool_name, args=tool_call["args"])
                     
                     try:
-                        if tool_name in self.interruptions: 
+                        if stop_processing_tools_flag:
+                            messages.append(ToolMessage(content="Tool skipped because of an error with the previous tool.", tool_call_id=tool_call["id"]))
+                        elif tool_name in self.interruptions:  # INTERRUPTION BECAUSE OF TOOL INTERRUPT
                             # Raise an exception with the tool data to interrupt execution and handle the result programatically.
                             if sync_mode:
                                 tool_result = self.tools[tool_name].run(tool_call)
                             else:
                                 tool_result = await self.tools[tool_name].arun(tool_call)
-                            raise ToolInterrupt(tool_name, tool_result=tool_result.content)
+                            messages.append(ToolMessage(content=tool_result.content, tool_call_id=tool_call["id"]))
+                            interrupt = ToolInterrupt(tool_name, tool_result=tool_result.content)
                         
-                        elif n_tool_called >= self.max_tool_depth:
+                        elif n_tool_called >= self.max_tool_depth:  # INTERRUPTION BECAUSE OF RECURSION DEPTH
                             yield ToolCallError(content=f"Exceeded maximum number of tools to be called in a row ({self.max_tool_depth})")
                             keep_streaming = False
-                            break
+                            stop_processing_tools_flag = True
 
-                        else:
+                        else:  # REGULAR TOOL CALLING
                             if sync_mode:
                                 for event in self.tools[tool_name].stream(tool_call):
-                                    self._update_messages(messages=messages, tool_call_id=tool_call["id"], event=event)
                                     yield event
+                                messages.append(ToolMessage(content=event.content, tool_call_id=tool_call["id"]))  # Last Event is a tool result or error
                             else:
                                 async for event in self.tools[tool_name].astream(tool_call):
-                                    self._update_messages(messages=messages, tool_call_id=tool_call["id"], event=event)
                                     yield event
+                                messages.append(ToolMessage(content=event.content, tool_call_id=tool_call["id"]))  # Last Event is a tool result or error
                             # Update the messages with temporary tool messages so the result is handled by the LLM.
                             n_tool_called += 1
 
-                    except ToolInterrupt as e:
-                        raise e
                     except Exception as e:
                         if n_consecutive_errors >= self.max_retries:
                             # Create a special error message for exceptions that are unrelated to the tool execution.
                             # NOTE : Exceptions related to the execution of the tool itself are handled using ToolCallError objects, handled in the loop above.
                             yield ToolCallError(content=self._create_error_tracking_message(tool_call, str(e)))
+                            messages.append(ToolMessage(content=f"An error occurred while running the tool : {type(e)} {str(e)}", tool_call_id=tool_call["id"]))
+                            stop_processing_tools_flag = True
                         else:
                             n_consecutive_errors += 1
+                            print(f"An error occurred while running the tool : {type(e)} {str(e)}")
+                            messages.append(ToolMessage(content=f"An error occurred while running the tool : {type(e)} {str(e)}", tool_call_id=tool_call["id"]))
+
+                    if interrupt:
+                        raise interrupt  # Raise the tool interrupt after the tool has been executed.
+                        # NOTE : Additional prompt components are expected to be added after the interruption has been handled.
+
             else:
                 yield llm_response
                 keep_streaming = False
