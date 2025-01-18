@@ -156,12 +156,11 @@ class BaseTool(LangchainBaseTool, ABC):
         else:
             raise ValueError(f"Unsupported parameters format. Expected str, dict, or ToolCall. Instead got {type(mixed_parameters).__name__}.")
     
-    @abstractmethod
     async def _arun(self, inp: Optional[BaseModel] = None) -> str:
         """
         Execute the tool and return the output or errors
         """
-        return ""
+        return "No script was defined for this tool. You should implement one of the _arun, _run, _stream or _astream methods in the tool depending on your needs."
 
     # ================================================================= DEFAULT BEHAVIOR METHODS
 
