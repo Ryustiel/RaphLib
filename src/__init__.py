@@ -10,6 +10,8 @@ from .functions import LLMFunction, LLMFunctionResult, BatchLLMFunctionResult
 from .tools import LLMWithTools, ToolInterrupt, BaseTool
 from .stables import StableModel, pydantic_model_from_options
 from .stream import (
+    to_str_stream,
+    to_str_stream_async,
     StreamEvent, 
     ResetStream, 
     ToolCallEvent, 
@@ -64,4 +66,7 @@ __all__ = [
     'ToolCallStream',
     'AITextResponseChunk',
     'AITextResponse',
+
+    'to_str_stream',
+    'to_str_stream_async',
 ]

@@ -17,7 +17,7 @@ from abc import ABC, abstractmethod
 from pydantic import BaseModel, Field, create_model
 from pydantic_core import ValidationError
 from langchain_core.tools import BaseTool as LangchainBaseTool
-from langchain_core.messages import BaseMessage, AIMessageChunk
+from langchain_core.messages import BaseMessage, AIMessageChunk, BaseMessageChunk
 from langchain_core.messages import ToolCall
 
 from .helpers import run_in_parallel_event_loop
@@ -84,6 +84,27 @@ class ToolCallError(ToolCallEvent):
     """
     content: str
 
+
+# Type conversions
+
+def to_str_stream(stream: Generator[AITextResponseChunk|Any, None, None]) -> Generator[str, None, None]: 
+    """
+    Converts a MessageChunk stream to a stream of string values.
+    """
+    for item in stream: 
+        if isinstance(item, AITextResponseChunk):
+            yield item.content
+
+async def to_str_stream_async(stream: AsyncGenerator[AITextResponseChunk|Any, None]) -> AsyncGenerator[str, None]:
+    """
+    Converts a MessageChunk stream to a stream of string values.
+    """
+    async for item in stream:
+        if isinstance(item, AITextResponseChunk):
+            yield item.content
+
+
+# BaseTool (core component)
 
 class BaseTool(LangchainBaseTool, ABC):
     """
