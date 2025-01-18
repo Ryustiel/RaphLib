@@ -142,6 +142,8 @@ class BaseTool(LangchainBaseTool, ABC):
         """
         if self.args_schema is None:  # Ignores any input parameters
             return None
+        elif isinstance(mixed_parameters, self.args_schema):  # Mixed parameters is a prebuilt schema
+            return mixed_parameters
         elif isinstance(mixed_parameters, str):
             return self.args_schema.model_validate_json(mixed_parameters)
         elif isinstance(mixed_parameters, dict):
