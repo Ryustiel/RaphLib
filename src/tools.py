@@ -5,6 +5,7 @@ from typing import (
     Any, 
     List, 
     Dict,
+    Type,
     Union, 
     Optional, 
     Generator,
@@ -48,7 +49,7 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
     def __init__(
             self, 
             llm: BaseChatModel, 
-            tools: List[BaseTool], 
+            tools: List[Union[BaseTool,Type[BaseTool]]], 
             interruptions: List[str] = [], 
             max_retries: int = 2,
             max_tool_depth: int = 10,
@@ -70,6 +71,8 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
             This is espacially useful when the tool is affecting other parts of the code, its execution is not self contained.
             NOTE : You should be handling ToolInterrupt exceptions when you are registering interruptions.
         """
+        tools = [tool() if isinstance(tool, type) else tool for tool in tools]  # Initialize any uninitialized tool
+
         self.tools = {tool.name: tool for tool in tools}
         self.interruptions = interruptions
         self.llm: BaseChatModel = llm.bind_tools(tools)
