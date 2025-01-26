@@ -75,7 +75,10 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
 
         self.tools = {tool.name: tool for tool in tools}
         self.interruptions = interruptions
-        self.llm: BaseChatModel = llm.bind_tools(tools)
+        if self.tools:
+            self.llm: BaseChatModel = llm.bind_tools(tools)
+        else:
+            self.llm: BaseChatModel = llm
         self.max_retries = max_retries
         self.max_tool_depth = max_tool_depth
 
