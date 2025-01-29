@@ -21,7 +21,7 @@ from langchain_core.runnables.config import RunnableConfig
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from .helpers import escape_characters, run_in_parallel_event_loop
+from .helpers import escape_characters, run_in_parallel_event_loop, get_or_create_event_loop
 from .stream import BaseTool, StreamEvent, AITextResponseChunk, AITextResponse, StreamFlags, ToolCallError, ToolCallInitialization, ToolCallResult
 
 class ToolInterrupt(BaseException):
@@ -227,7 +227,7 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
         """
         async_gen_instance = self.astream(input=input, config=config, stream_text=stream_text, sync_mode=True, **kwargs)
         try:
-            loop = asyncio.get_event_loop()
+            loop = get_or_create_event_loop()
             if loop.is_running():
                 while True:
                     yield run_in_parallel_event_loop(future=async_gen_instance.__anext__())
@@ -282,7 +282,7 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
         Return an AIMessage containing the last textual response from the LLM.
         Return a SystemMessage containing the last error that's occurred in case of an error.
         """
-        loop = asyncio.get_event_loop()
+        loop = get_or_create_event_loop()
         if loop.is_running():
             return run_in_parallel_event_loop(future=self.ainvoke(input=input, config=config, sync_mode=True, **kwargs))
         else:

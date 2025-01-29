@@ -60,6 +60,9 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
 
     def size(self):
         return len(self.messages)
+    
+    def __len__(self):
+        return len(self.messages)
 
 
     def _select_messages(self, start_index: int, end_index: int) -> List[ChatMessage]:
@@ -541,7 +544,8 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         return ChatHistory(messages=new_messages, types=self.types.copy())
 
     def invoke(self, input: dict, config: Optional[RunnableConfig] = None, **kwargs) -> PromptValue:
-        return ChatPromptTemplate(messages=self.as_base_message()).invoke(input, config, **kwargs)
+        # Replace with "as_base_message()" depending on your langchain version
+        return ChatPromptTemplate(messages=self.as_message_like(), template_format="f-string").invoke(input, config, **kwargs)
     
     def to_str(self):
         """

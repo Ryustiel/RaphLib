@@ -26,7 +26,7 @@ from langchain_core.runnables.config import RunnableConfig
 from langchain_core.prompt_values import PromptValue
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from .helpers import escape_characters, run_in_parallel_event_loop
+from .helpers import escape_characters, run_in_parallel_event_loop, get_or_create_event_loop
 from .stream import StreamEvent, ResetStream, AITextResponseChunk, AITextResponse, StreamFlags
 from .prompts import ChatHistory
 from .tools import ToolInterrupt, LLMWithTools
@@ -143,11 +143,11 @@ class LLMFunction(Runnable):
         elif isinstance(prompt, str):
             self.prompt: ChatHistory = ChatHistory().append("system", prompt, keep_variables=True)
         elif isinstance(prompt, list):  # List of tuples like [("system", "message"), ("ai", "response")]
-            self.prompt: ChatHistory = ChatHistory().append(prompt)
+            self.prompt: ChatHistory = ChatHistory().append(prompt, keep_variables=True)
         elif isinstance(prompt, ChatHistory):
             self.prompt: ChatHistory = prompt
         elif isinstance(prompt, ChatPromptTemplate):
-            self.prompt: ChatHistory = ChatHistory().append(prompt.messages)  # Convert to ChatHistory
+            self.prompt: ChatHistory = ChatHistory().append(prompt.messages, keep_variables=True)  # Convert to ChatHistory
         else:
             raise ValueError(f"Unsupported prompt format. Must be a ChatPromptTemplate, str, or list of tuples. Instead got {prompt}.")
 
@@ -219,6 +219,7 @@ class LLMFunction(Runnable):
         while current_retry_count < max_retries:
             if current_retry_count > 0:
                 logging.warning(f"Retrying : Attempt nb. {current_retry_count+1}")
+                print(f"Retrying : Attempt nb. {current_retry_count+1}")
 
             try:
                 if sync_mode:
@@ -245,7 +246,7 @@ class LLMFunction(Runnable):
         max_retries: Optional[int] = None, 
         **kwargs
     ) -> BaseModel:
-        if asyncio.get_event_loop().is_running():
+        if get_or_create_event_loop().is_running():
             return run_in_parallel_event_loop(future=self.ainvoke(input=input, config=config, max_retries=max_retries, sync_mode=True, **kwargs))
         else:
             return asyncio.run(main=self.ainvoke(input=input, config=config, max_retries=max_retries, sync_mode=True, **kwargs))
@@ -332,6 +333,7 @@ class LLMFunction(Runnable):
         while current_retry_count < max_retries:
             if current_retry_count > 0:
                 logging.warning(f"Retrying : Attempt nb. {current_retry_count+1}")
+                print(f"Retrying : Attempt nb. {current_retry_count+1}")
 
             try:
                 buffer: str = ""
@@ -405,7 +407,7 @@ class LLMFunction(Runnable):
             **kwargs
         )  # Initialize the async generator
         try:
-            loop = asyncio.get_event_loop()
+            loop = get_or_create_event_loop()
             if loop.is_running():
                 while True:
                     yield run_in_parallel_event_loop(future=async_gen_instance.__anext__())
@@ -493,7 +495,7 @@ class LLMFunction(Runnable):
         NOTE : This Method has the advantage of being compatible with Threading.
         """
         try:
-            if asyncio.get_event_loop().is_running():  # Running inside an async loop
+            if get_or_create_event_loop().is_running():  # Running inside an async loop
                 future = asyncio.ensure_future(self.arun_many(inputs=inputs, max_retries=max_retries, raise_errors=raise_errors, use_threading=use_threading, **kwargs))
                 return asyncio.get_event_loop().run_until_complete(future)
                 

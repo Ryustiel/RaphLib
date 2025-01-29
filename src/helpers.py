@@ -26,6 +26,15 @@ def start_event_loop(loop: asyncio.BaseEventLoop):
     asyncio.set_event_loop(loop)
     loop.run_forever()
 
+def get_or_create_event_loop():
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        # Create a new event loop if none exists
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop
+
 def run_in_parallel_event_loop(future: asyncio.Future) -> Any:
     """
     Run the coroutine in a separate thread and return the result.
@@ -58,7 +67,6 @@ ESCAPE_MAP = {
     }
 
 def escape_characters(text: str) -> str:
-
     # Replace each character in escape_map with its escaped version
     for char, escaped_char in ESCAPE_MAP.items():
         text = text.replace(char, escaped_char)

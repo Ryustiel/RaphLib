@@ -20,7 +20,7 @@ from langchain_core.tools import BaseTool as LangchainBaseTool
 from langchain_core.messages import BaseMessage, AIMessageChunk, BaseMessageChunk
 from langchain_core.messages import ToolCall
 
-from .helpers import run_in_parallel_event_loop
+from .helpers import run_in_parallel_event_loop, get_or_create_event_loop
 
 
 StreamFlags = Literal["cancel", "interrupt"]
@@ -165,7 +165,7 @@ class BaseTool(LangchainBaseTool, ABC):
     # ================================================================= DEFAULT BEHAVIOR METHODS
 
     def _run(self, inp: Optional[BaseModel] = None) -> str:
-        if asyncio.get_event_loop().is_running():
+        if get_or_create_event_loop().is_running():
             return run_in_parallel_event_loop(future=self._arun(inp=inp))
         else:
             return asyncio.run(main=self._arun(inp=inp))
