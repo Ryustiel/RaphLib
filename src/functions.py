@@ -158,8 +158,11 @@ class LLMFunction(Runnable):
         """
         local_prompt = self.prompt
 
-        if not input: 
+        if input is None: 
             input = dict()
+
+        if isinstance(input, dict):
+            if len(kwargs) > 0: input.update(kwargs)  # support adding inp values as kwargs
 
         elif isinstance(input, PromptValue):  # List[BaseMessage]
             local_prompt = local_prompt.copy()  # Only case where the copy method is needed.
@@ -168,11 +171,8 @@ class LLMFunction(Runnable):
 
         elif isinstance(input, str):
             if not local_prompt.exists("human"): local_prompt.create_type("human", "HumanMessage")
-            local_prompt.append("human", input.content)
+            local_prompt.append("human", input)
             input = dict()
-
-        elif isinstance(input, dict):
-            if len(kwargs) > 0: input.update(kwargs)  # support adding inp values as kwargs
 
         else:
             raise ValueError(f"Unsupported input format. Must be a dict, str, or list of BaseMessage. Instead got {input}.")
@@ -212,6 +212,7 @@ class LLMFunction(Runnable):
                           if set to False, always return a LLMFunctionResult with a success bool and the result or an error.
         """
         input, local_prompt = self._prepare_local_prompt_and_input(input=input, kwargs=kwargs)
+
         if max_retries is None: max_retries = self.max_retries
         current_retry_count = 0
         error_messages = list()

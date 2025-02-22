@@ -61,6 +61,9 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
     def size(self):
         return len(self.messages)
     
+    def exists(self, type: str) -> bool:
+        return type in self.types.keys()
+    
     def __len__(self):
         return len(self.messages)
 
