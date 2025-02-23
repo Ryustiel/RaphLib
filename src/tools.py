@@ -333,16 +333,8 @@ def tool(input_model: Optional[BaseModel] = None, **kwargs) -> BaseTool:
             args_schema: type = local_input_model
 
             print(is_async, is_gen, is_asyncgen)
-            
-            if is_async and not is_asyncgen:
-                async def _arun(self, inp: Optional[BaseModel] = None) -> str:
-                    return await f(inp)
-                
-            elif not is_async and not is_gen:
-                def _run(self, inp: Optional[BaseModel] = None) -> str:
-                    return f(inp)
                     
-            elif is_asyncgen:
+            if is_asyncgen:
                 async def _astream(self, inp: Optional[BaseModel] = None) -> AsyncGenerator[str, None]:
                     async for item in f(inp):
                         yield item
@@ -351,9 +343,14 @@ def tool(input_model: Optional[BaseModel] = None, **kwargs) -> BaseTool:
                 def _stream(self, inp: Optional[BaseModel] = None) -> Generator[str, None, None]:
                     for item in f(inp):
                         yield item
-            
+
+            if is_async:
+                async def _arun(self, inp: Optional[BaseModel] = None) -> str:
+                    return await f(inp)
+
             else:
-                raise ValueError("Wtf is this function??")
+                def _run(self, inp: Optional[BaseModel] = None) -> str:
+                    return f(inp)
         
         return ToolWrapper()
 
