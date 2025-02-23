@@ -7,9 +7,9 @@ import dotenv, langchain_core, pydantic_core, langchain, pydantic, langchain_ope
 
 from .prompts import ChatHistory, ChatMessage
 from .functions import LLMFunction, LLMFunctionResult, BatchLLMFunctionResult
-from .tools import LLMWithTools, ToolInterrupt, BaseTool
+from .stream import LLMWithTools, ToolInterrupt
 from .stables import StableModel, pydantic_model_from_options
-from .stream import (
+from .tools import (
     to_str_stream,
     to_str_stream_async,
     StreamEvent, 
@@ -20,6 +20,9 @@ from .stream import (
     ToolCallStream, 
     AITextResponseChunk, 
     AITextResponse,
+
+    BaseTool,
+    tool,
 )
 from .helpers import (
     LapTimer, 
@@ -45,7 +48,6 @@ __all__ = [
     'StableModel',
     
     'ToolInterrupt', 
-    'BaseTool',
     'pydantic_model_from_options',
 
     'balance_results',
@@ -66,6 +68,9 @@ __all__ = [
     'ToolCallStream',
     'AITextResponseChunk',
     'AITextResponse',
+
+    'BaseTool',
+    'tool',
 
     'to_str_stream',
     'to_str_stream_async',

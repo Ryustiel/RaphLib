@@ -1,289 +1,360 @@
-import logging
-import asyncio
 
 from typing import (
     Any, 
-    List, 
-    Dict,
-    Type,
     Union, 
-    Optional, 
-    Generator,
+    Dict, 
+    List, 
+    Tuple, 
+    Literal, 
+    Generator, 
     AsyncGenerator,
+    Type, 
+    Optional, 
+    Callable,
 )
+from abc import ABC
 from pydantic import BaseModel
 
-from langchain_core.tools import StructuredTool
-from langchain_core.prompt_values import ChatPromptValue
-from langchain_core.messages import BaseMessage, AIMessage, SystemMessage, ToolMessage
-from langchain_core.runnables.base import Runnable
-from langchain_core.runnables.config import RunnableConfig
-from langchain_core.language_models import LanguageModelInput
-from langchain_core.language_models.chat_models import BaseChatModel
+import asyncio
+import inspect
 
-from .helpers import escape_characters, run_in_parallel_event_loop, get_or_create_event_loop
-from .stream import BaseTool, StreamEvent, AITextResponseChunk, AITextResponse, StreamFlags, ToolCallError, ToolCallInitialization, ToolCallResult
+from langchain_core.tools import BaseTool as LangchainBaseTool
+from langchain_core.messages import BaseMessage, AIMessageChunk, BaseMessageChunk, ToolCall
 
-class ToolInterrupt(BaseException):
-    def __init__(self, tool_name: str, *args, **kwargs):
-        self.tool_name: str = tool_name
-        self.kwargs: dict = kwargs
-        super().__init__(f"Event {self.tool_name} was triggered. Value is {kwargs}.", *args)
-
-    def __getitem__(self, key):
-        """Retrieve values from kwargs like a dict"""
-        if key in self.kwargs:
-            return self.kwargs[key]
-        else:
-            raise KeyError(f"Key '{key}' not found in ToolInterrupt kwargs.")
-    
-    def __repr__(self):
-        """Optional: custom string representation of the ToolInterrupt."""
-        return f"<ToolInterrupt tool_name={self.tool_name}, kwargs={self.kwargs}>"
+from .helpers import run_in_parallel_event_loop, get_or_create_event_loop
+from .parsers import pydantic_model_from_options
 
 
-class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
+StreamFlags = Literal["cancel", "interrupt"]
+
+
+class StreamEvent(BaseModel):
     """
-    A non serializable runnable that behaves like a BaseChatModel when invoked, but manages tools automatically.
+    An event that can be outputted by a stream.
     """
-    def __init__(
-            self, 
-            llm: BaseChatModel, 
-            tools: List[Union[BaseTool,Type[BaseTool]]], 
-            interruptions: List[str] = [], 
-            max_retries: int = 2,
-            max_tool_depth: int = 10,
+    pass
 
-        ):
-        """
-        This class behaves like a BaseChatModel except for the fact that it 
-        handles tool calls automatically, in different ways depending on the method you invoke it with.
-        Can be sync and async streamed, or invoked.
 
-        NOTE : If you are registering interruptions (len(self.interruptions) > 0), you have to handle ToolInterrupt exceptions.
+class ResetStream(StreamEvent):
+    """
+    Flag raised when a stream has been reset.
+    """
+    error: str
 
-        Tool Interrupts : 
-            ToolInterrupts are specific events (the only events) that are triggered
-            whenever a tool in self.interruption has been called by the LLM.
-            The tool function is actually executed and its output is contained in the ToolInterrupt object.
+class AITextResponseChunk(StreamEvent):
+    """
+    Contains bits of the text response of the model.
+    Should be deleted if the ResetStream event is received.
+    """
+    content: str
 
-            NOTE : This is designed to allow for extra processing of this tool call outside the LLMWithTool's invoke loop.
-            This is espacially useful when the tool is affecting other parts of the code, its execution is not self contained.
-            NOTE : You should be handling ToolInterrupt exceptions when you are registering interruptions.
-        """
-        tools = [tool() if isinstance(tool, type) else tool for tool in tools]  # Initialize any uninitialized tool
+class AITextResponse(AIMessageChunk):
+    """
+    Represents completed AIMessageChunks that a LLMWithTools has emitted.
+    Behaves like an AIMessage.
+    """
+    pass
 
-        self.tools = {tool.name: tool for tool in tools}
-        self.interruptions = interruptions
-        if self.tools:
-            self.llm: BaseChatModel = llm.bind_tools(tools)
-        else:
-            self.llm: BaseChatModel = llm
-        self.max_retries = max_retries
-        self.max_tool_depth = max_tool_depth
+class ToolCallEvent(StreamEvent):
+    """
+    Base class for all events that were triggered by a tool call.
+    """
+    pass
 
-    def _create_error_tracking_message(self, tool_call: Dict[str, Any], error: Exception) -> str:
-        """
-        Create a system message with the tool call and result.
-        """
-        return f"""
-            Tool call: {tool_call['name']} {escape_characters(str(tool_call['args']))}\n
-            Error: {escape_characters(str(error))}
-        """
+class ToolCallInitialization(ToolCallEvent):
+    """
+    Triggered when a tool is about to be executed.
+    """
+    tool_name: str
+    args: dict
 
-    def add_tools(self, tools: List[BaseTool] = [], interruptions: List[str] = []):
-        """
-        Add the provided tools to the list.
-        If a tool with a similar name already exists replace it with the provided one.
-        """
-        self.tools.update({tool.name: tool for tool in tools})
-        self.interruptions.extend(interruptions)
-        self.llm: BaseChatModel = self.llm.bind_tools(tools)
+class ToolCallStream(ToolCallEvent):
+    """
+    Triggered when a result is being streamed from the tool.
+    """
+    content: str
 
-    def overwrite_tools(self, tools: List[List[BaseTool]] = [], interruptions: List[str] = []):
-        """
-        Overwrite the tools and iterruptions with the provided lists.
-        If no parameters are passed, simply reset all the tools.
-        """
-        self.tools = {tool.name: tool for tool in tools}
-        self.interruptions = interruptions
+class ToolCallResult(ToolCallEvent):
+    """
+    Triggered when a tool is done with a result.
+    """
+    content: str
 
-    async def astream(self,
-        input: LanguageModelInput, 
-        config: Optional[RunnableConfig] = None, 
-        sync_mode: bool = False,
-        stream_text: bool = True,
-        **kwargs
-    ) -> AsyncGenerator[AITextResponse|StreamEvent, StreamFlags]:
-        """
-        Stream the llm output as well as special events when tools are called.
+class ToolCallError(ToolCallEvent):
+    """
+    Triggered when a tool has been called and returned an error.
+    """
+    content: str
 
-        sync_mode : whether to use the streaming's async functions or not.
-        stream_text : whether to yield chunks of llm response obtained via stream or to yield entire str responses.
-        NOTE : If stream_text is False then the streaming will yield full text messages (str) and StreamEvents.
-        If it is set to True, the streaming will yield text message chunks (str) and StreamEvents.
-        NOTE : stream_text can only be set to True if the LLM supports the .stream or .astream methods.
-        """
-        prompt: ChatPromptValue = self.llm._convert_input(input)
-        messages: List[BaseMessage] = prompt.to_messages()  # Extract the messages from the prompt so it's compatible with llm invoke.
 
-        n_tool_called: int = 0
-        keep_streaming: bool = True
-        while keep_streaming:
-            n_consecutive_errors: int = 0
+# Type conversions
 
-            if sync_mode:
-                if stream_text:
-                    # Streaming llm output unless it's a ToolCall
-                    llm_response = AITextResponse(content='')
-                    for chunk in self.llm.stream(messages, config, **kwargs):
-                        llm_response += chunk
-                        if chunk.content:
-                            yield AITextResponseChunk(content=chunk.content)  # Yield the text content of this chunk
-                else:
-                    llm_response: AIMessage = self.llm.invoke(messages, config, **kwargs)
-            else:
-                if stream_text:
-                    llm_response = AITextResponse(content='')
-                    async for chunk in self.llm.astream(messages, config, **kwargs):
-                        llm_response += chunk
-                        if chunk.content:
-                            yield AITextResponseChunk(content=chunk.content)  # Yield the text content of this chunk
-                else:
-                    llm_response: AIMessage = await self.llm.ainvoke(messages, config, **kwargs)
+def to_str_stream(stream: Generator[AITextResponseChunk|Any, None, None]) -> Generator[str, None, None]: 
+    """
+    Converts a MessageChunk stream to a stream of string values.
+    """
+    for item in stream: 
+        if isinstance(item, AITextResponseChunk):
+            yield item.content
 
-            messages.append(llm_response)
+async def to_str_stream_async(stream: AsyncGenerator[AITextResponseChunk|Any, None]) -> AsyncGenerator[str, None]:
+    """
+    Converts a MessageChunk stream to a stream of string values.
+    """
+    async for item in stream:
+        if isinstance(item, AITextResponseChunk):
+            yield item.content
 
-            stop_processing_tools_flag = False  # Set to True when encountering a stopping condition
-            interrupt: Optional[ToolInterrupt] = None
 
-            if hasattr(llm_response, 'tool_calls') and len(llm_response.tool_calls) > 0:  # FIXME : should be done without hasattr ideally (using some AIMessage guaranteed attribute)
-                for tool_call in llm_response.tool_calls:  # NOTE : All tools must be processed and provided a response, even if it's an error.
-                    tool_name = tool_call["name"].lower()
-                    yield ToolCallInitialization(tool_name=tool_name, args=tool_call["args"])
-                    
-                    try:
-                        if stop_processing_tools_flag:
-                            messages.append(ToolMessage(content="Tool skipped because of an error with the previous tool.", tool_call_id=tool_call["id"]))
-                        elif tool_name in self.interruptions:  # INTERRUPTION BECAUSE OF TOOL INTERRUPT
-                            # Raise an exception with the tool data to interrupt execution and handle the result programatically.
-                            if sync_mode:
-                                tool_result = self.tools[tool_name].run(tool_call)
-                            else:
-                                tool_result = await self.tools[tool_name].arun(tool_call)
-                            messages.append(ToolMessage(content=tool_result.content, tool_call_id=tool_call["id"]))
-                            interrupt = ToolInterrupt(tool_name, tool_result=tool_result.content)
-                        
-                        elif n_tool_called >= self.max_tool_depth:  # INTERRUPTION BECAUSE OF RECURSION DEPTH
-                            yield ToolCallError(content=f"Exceeded maximum number of tools to be called in a row ({self.max_tool_depth})")
-                            keep_streaming = False
-                            stop_processing_tools_flag = True
+# BaseTool (core component)
 
-                        else:  # REGULAR TOOL CALLING
-                            if sync_mode:
-                                for event in self.tools[tool_name].stream(tool_call):
-                                    yield event
-                                messages.append(ToolMessage(content=event.content, tool_call_id=tool_call["id"]))  # Last Event is a tool result or error
-                            else:
-                                async for event in self.tools[tool_name].astream(tool_call):
-                                    yield event
-                                messages.append(ToolMessage(content=event.content, tool_call_id=tool_call["id"]))  # Last Event is a tool result or error
-                            # Update the messages with temporary tool messages so the result is handled by the LLM.
-                            n_tool_called += 1
+class BaseTool(LangchainBaseTool, ABC):
+    """
+    An extension of the BaseTool class that also interfaces streaming.
 
-                    except Exception as e:
-                        if n_consecutive_errors >= self.max_retries:
-                            # Create a special error message for exceptions that are unrelated to the tool execution.
-                            # NOTE : Exceptions related to the execution of the tool itself are handled using ToolCallError objects, handled in the loop above.
-                            yield ToolCallError(content=self._create_error_tracking_message(tool_call, str(e)))
-                            messages.append(ToolMessage(content=f"An error occurred while running the tool : {type(e)} {str(e)}", tool_call_id=tool_call["id"]))
-                            stop_processing_tools_flag = True
-                        else:
-                            n_consecutive_errors += 1
-                            print(f"An error occurred while running the tool : {type(e)} {str(e)}")
-                            messages.append(ToolMessage(content=f"An error occurred while running the tool : {type(e)} {str(e)}", tool_call_id=tool_call["id"]))
+    ### How to build a tool (Subclass this):
+        1. Specify a str "**name**" and a str "**description**" attribute.
+        2. Specify a type "**args_schema**" pydantic model
+        that determines the tool's input schema.
+        3. Implement some of the following methods 
+        -> **_run**, **_arun**, **_stream**, or **_astream**
 
-                    if interrupt:
-                        raise interrupt  # Raise the tool interrupt after the tool has been executed.
-                        # NOTE : Additional prompt components are expected to be added after the interruption has been handled.
+    ### Notes:
+        - Input will be a pydantic model adhering to the provided args_schema.
+        - If the stream method is not further implemented in the subclass, 
+        streaming will yield a single "response" event. 
+        - The asynchronous run (arun) is derived from the synchronous run method 
+        by default and vice versa. At least one of those methods 
+        should be implemented if using the built-in **raphlib.LLMWithTools**.
 
-            else:
-                yield llm_response
-                keep_streaming = False
+    ### Exemple:
+
+        class TemplateTool(BaseTool):
+            name: str = "get_information"
+            description: str = "Must be run once before replying to the user."
+            args_schema: Type[BaseModel] = pydantic_model_from_options(
+                random_fruit_name=str
+            )
             
-    def stream(self,
-        input: LanguageModelInput, 
-        config: Optional[RunnableConfig] = None, 
-        stream_text: bool = True,
-        **kwargs
-    ) -> Generator[BaseMessage|StreamEvent, StreamFlags, None]:
-        """
-        Stream the llm output as well as special events when tools are called.
+            async def _arun(self, inp: BaseModel) -> str:
+                ...
+    """
+    name: str
+    description: str
+    args_schema: Optional[Type[BaseModel]] = None  # Empty args schema is an "Any" type of input
 
-        stream_text : whether to yield chunks of llm response obtained via stream or to yield entire str responses.
-        NOTE : If stream_text is False then the streaming will yield full text messages (str) and StreamEvents.
-        If it is set to True, the streaming will yield text message chunks (str) and StreamEvents.
-        NOTE : stream_text can only be set to True if the LLM supports the .stream or .astream methods.
+    def _extract_parameters(self, mixed_parameters: Optional[Union[str, dict, ToolCall]]) -> Optional[BaseModel]:
         """
-        async_gen_instance = self.astream(input=input, config=config, stream_text=stream_text, sync_mode=True, **kwargs)
+        Turn the parameters into a homogeneous pydantic model to be used by the actual tool methods.
+        This function can contain parsing errors.
+        """
+        if self.args_schema is None:
+            if mixed_parameters is None:
+                return None
+            else:
+                raise ValueError(f"No input was expected but an input was provided : {mixed_parameters}")
+        elif isinstance(mixed_parameters, self.args_schema):  # Mixed parameters is a prebuilt schema
+            return mixed_parameters
+        elif isinstance(mixed_parameters, str):
+            return self.args_schema.model_validate_json(mixed_parameters)
+        elif isinstance(mixed_parameters, dict):
+            if 'args' in mixed_parameters.keys():
+                return self.args_schema.model_validate(mixed_parameters['args'])
+            else: # Is a normal dict input
+                return self.args_schema.model_validate(mixed_parameters)
+        elif isinstance(mixed_parameters, ToolCall):
+            return self.args_schema.model_validate(mixed_parameters.to_dict())
+        else:
+            raise ValueError(f"Unsupported parameters format. Expected str, dict, or ToolCall. Instead got {type(mixed_parameters).__name__}.")
+    
+    async def _arun(self, inp: Optional[BaseModel] = None) -> str:
+        """
+        Execute the tool and return the output or errors
+        """
+        return "No script was defined for this tool. You should implement one of the _arun, _run, _stream or _astream methods in the tool depending on your needs."
+
+    # ================================================================= DEFAULT BEHAVIOR METHODS
+
+    def _run(self, inp: Optional[BaseModel] = None) -> str:
+        if get_or_create_event_loop().is_running():
+            return run_in_parallel_event_loop(future=self._arun(inp=inp))
+        else:
+            return asyncio.run(main=self._arun(inp=inp))
+
+    async def _astream(self, inp: Optional[BaseModel] = None) -> AsyncGenerator[str, None]:
+        """
+        Streams the tool output as stream events, asynchronously (errors, partial responses, full response).
+        """
+        yield await self._arun(inp=inp)
+
+    def _stream(self, inp: Optional[BaseModel] = None) -> Generator[str, None, None]:
+        """
+        Streams the tool output as stream events (errors, partial responses, full response).
+        """
+        yield self._run(inp=inp)
+
+    # ================================================================= GATEWAY METHODS
+
+    async def arun(self, mixed_parameters: Optional[Union[str, Dict[str, Any], ToolCall]] = None)  -> (ToolCallResult|ToolCallError):
+        """
+        Execute the tool and return the output or errors
+        """
         try:
-            loop = get_or_create_event_loop()
-            if loop.is_running():
-                while True:
-                    yield run_in_parallel_event_loop(future=async_gen_instance.__anext__())
-            else:
-                while True:
-                    yield loop.run_until_complete(future=async_gen_instance.__anext__())
-        except StopAsyncIteration:
-            pass
+            inp = self._extract_parameters(mixed_parameters=mixed_parameters)
+            result = await self._arun(inp=inp)
+            if not isinstance(result, str):
+                raise ValueError(f"The _arun() method did not return a string. Got: {result}")
+            return ToolCallResult(
+                content = result
+            )
+        except Exception as e:
+            return ToolCallError(content=f"An exception occurred when calling the tool {self.name} : {str(e)}")
 
-    async def ainvoke(self, 
-        input: LanguageModelInput, 
-        config: Optional[RunnableConfig] = None, 
-        sync_mode: bool = False,
-        **kwargs
-    ) -> BaseMessage:
+    def run(self, mixed_parameters: Optional[Union[str, Dict[str, Any], ToolCall]] = None) -> (ToolCallResult|ToolCallError):
         """
-        Run a LLM and handle tool calls automatically until a final text response with no more tool call is received.
-        Return an AIMessage containing the last textual response from the LLM.
-        Return a SystemMessage containing the last error that's occurred in case of an error.
+        Execute the tool and return the output or errors.
         """
-        lastest_exception: Optional[ToolCallError] = None
-        latest_response: Optional[AIMessage] = None
-        async for event in self.astream(input=input, config=config, sync_mode=sync_mode, stream_text=False, **kwargs):
-            if isinstance(event, ToolCallError):
-                # Store the exception for returning in case of no result is generated
-                lastest_exception = event
-            elif isinstance(event, StreamEvent):
-                pass  # Let the tools run themselves
-            elif isinstance(event, AIMessage):
-                # First test event received contains the LLM response
-                if latest_response:
-                    latest_response.content += "\n\n" + event.content  # XXX : Merging AIMessage
-                else:
-                    latest_response = event
-            else:
-                raise ValueError(f"Unexpected event type: {type(event)}")
+        try:
+            inp = self._extract_parameters(mixed_parameters=mixed_parameters)
+            
+            result = self._run(inp=inp)
+            if not isinstance(result, str):
+                raise ValueError(f"The _run() method did not return a string. Got: {result}")
+            return ToolCallResult(
+                content = result
+            )
+        except Exception as e:
+            return ToolCallError(content=f"An exception occurred when calling the tool {self.name} : {str(e)}")
+
+    async def astream(self, mixed_parameters: Optional[Union[str, Dict[str, Any], ToolCall]] = None) -> AsyncGenerator[ToolCallEvent, None]:
+        """
+        Streams the tool output as stream events, asynchronously (errors, partial responses, full response).
+        """
+        buffer = ""
+        try:
+            inp = self._extract_parameters(mixed_parameters=mixed_parameters)
+            async for event in self._astream(inp=inp):
+                if not isinstance(event, str):
+                    raise ValueError(f"The _astream() method did not yield a string. Got: {event}")
+                buffer += event
+                yield ToolCallStream(content=event)
+            yield ToolCallResult(content=buffer)
+        except Exception as e:
+            yield ToolCallError(content=f"An exception occurred when calling the tool {self.name} : {str(e)}")
+
+    def stream(self, mixed_parameters: Optional[Union[str, Dict[str, Any], ToolCall]] = None) -> Generator[ToolCallEvent, None, None]:
+        """
+        Streams the tool output as stream events (errors, partial responses, full response).
+        """
+        buffer = ""
+        try:
+            inp = self._extract_parameters(mixed_parameters=mixed_parameters)
+            for event in self._stream(inp=inp):
+                if not isinstance(event, str):
+                    raise ValueError(f"The _stream() method did not yield a string. Got: {event}")
+                buffer += event
+                yield ToolCallStream(content=event)
+            yield ToolCallResult(content=buffer)
+        except Exception as e:
+            yield ToolCallError(content=f"An exception occurred when calling the tool {self.name} : {str(e)}")
+
+    def __str__(self):
+        if self.args_schema is None:
+            return f"\n=== Tool\nName: \n{self.name}\n\nModel: \nNo Input\n\nDescription: \n{self.description}\n=== End Tool"
+        else:
+            return f"\n=== Tool\nName: \n{self.name}\n\nModel: \n{self.args_schema.__name__} > {self.args_schema.model_fields}\n\nDescription: \n{self.description}\n=== End Tool"
+
+
+# BaseTool maker decorator
+
+
+def tool(input_model: Optional[BaseModel] = None, **kwargs) -> BaseTool:
+    """
+    Decorator to convert a function into a BaseTool instance.
+
+    Parameters:
+        input_model (Optional[BaseModel]): A pydantic model for input validation.
+            If not provided, kwargs are used to create one, or the function's 
+            **parameter type** if available. If nothing is provided, defaults to **no input**.
+        **kwargs: Pydantic options used to build an input model (similar to LLMFunction inputs).
+
+    The decorated function can be synchronous, asynchronous, or a generator.
+    When using generators, each yielded value produces a streamed event, and the final value
+    is displayed to the LLM. Raises ValueError if the function signature is invalid.
+
+    ## Example:
+    
+        @tool
+        def func(inp: InputModel):
+            return f"The input was {inp.parameter}"
+    """
+    
+    def decorator(f: Callable):
+
+        local_input_model = input_model
+        local_kwargs = kwargs
         
-        if latest_response:
-            return latest_response
-        elif lastest_exception:
-            return SystemMessage(content=lastest_exception.content)
-        else:
-            raise ValueError("Streaming produced no output, which is abnormal.")
+        # 1. Create the input schema if not provided.
+        if local_input_model is None and local_kwargs:
+            local_input_model = pydantic_model_from_options(**local_kwargs)
+        
+        # 2. Inspect the function signature to ensure it has zero or one parameter.
+        sig = inspect.signature(f)
+        if len(sig.parameters) > 1:
+            raise ValueError("Tool function must have zero or one parameter, which must be an instance of BaseModel (or annotated with one).")
 
-    def invoke(self, 
-        input: LanguageModelInput, 
-        config: Optional[RunnableConfig] = None, 
-        **kwargs
-    ) -> BaseMessage:
-        """
-        Run a LLM and handle tool calls automatically until a final text response with no more tool call is received.
-        Return an AIMessage containing the last textual response from the LLM.
-        Return a SystemMessage containing the last error that's occurred in case of an error.
-        """
-        loop = get_or_create_event_loop()
-        if loop.is_running():
-            return run_in_parallel_event_loop(future=self.ainvoke(input=input, config=config, sync_mode=True, **kwargs))
-        else:
-            return asyncio.run(main=self.ainvoke(input=input, config=config, sync_mode=True, **kwargs))
+        # 3. Get the unique parameter, if any.
+        param = next(iter(sig.parameters.values()), None)
+
+        # 4. If no input model (and no keyword schema options) is provided, try to derive args_schema from the parameter's type.
+        if local_input_model is None and not local_kwargs and param is not None:
+            if param.annotation is not inspect.Parameter.empty:
+                local_input_model = param.annotation
+            else:
+                raise ValueError(
+                    f"Tool function '{f.__name__}' expects a parameter "
+                    "but no input_model was provided and the parameter "
+                    "lacks a type annotation to build an args_schema."
+                )
+
+        # 5. Determine the function type (sync/async, generator, etc.)
+        is_async = asyncio.iscoroutinefunction(f)
+        is_gen = inspect.isgeneratorfunction(f)
+        is_asyncgen = inspect.isasyncgenfunction(f)
+        
+        # 6. Dynamically create a BaseTool subclass that wraps f.
+        class ToolWrapper(BaseTool):
+            name: str = f.__name__
+            description: str = f.__doc__ or (
+                f"This tool was autogenerated by a decorated function. No docstring was included "
+                f"in the original function, therefore this tool has no description. Please warn the developer "
+                f"that function \"{f.__name__}\" needs a docstring."
+            )
+            args_schema: type = local_input_model
+
+            print(is_async, is_gen, is_asyncgen)
+            
+            if is_async and not is_asyncgen:
+                async def _arun(self, inp: Optional[BaseModel] = None) -> str:
+                    return await f(inp)
+                
+            elif not is_async and not is_gen:
+                def _run(self, inp: Optional[BaseModel] = None) -> str:
+                    return f(inp)
+                    
+            elif is_asyncgen:
+                async def _astream(self, inp: Optional[BaseModel] = None) -> AsyncGenerator[str, None]:
+                    async for item in f(inp):
+                        yield item
+
+            elif is_gen:
+                def _stream(self, inp: Optional[BaseModel] = None) -> Generator[str, None, None]:
+                    for item in f(inp):
+                        yield item
+            
+            else:
+                raise ValueError("Wtf is this function??")
+        
+        return ToolWrapper()
+
+    return decorator

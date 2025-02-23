@@ -27,9 +27,9 @@ from langchain_core.prompt_values import PromptValue
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from .helpers import escape_characters, run_in_parallel_event_loop, get_or_create_event_loop
-from .stream import StreamEvent, ResetStream, AITextResponseChunk, AITextResponse, StreamFlags
+from .tools import StreamEvent, ResetStream, AITextResponseChunk, AITextResponse, StreamFlags
 from .prompts import ChatHistory
-from .tools import ToolInterrupt, LLMWithTools
+from .stream import ToolInterrupt, LLMWithTools
 from .stables import StableModel
 from .parsers import OutputParser
 
@@ -47,67 +47,79 @@ class BatchLLMFunctionResult:
 
 class LLMFunction(Runnable):
     """
-    An interface to create LLM function calls with minimal effort.
+    An interface for creating LLM function calls with minimal effort.
 
-    Prompt can be a string (interpreted as a system prompt), a [("type", "message"),] message list, or a ChatPromptTemplate.
-    Kwargs are parameters for the pydantic model, except the special "pydantic_model" kwarg that accepts a prebuilt pydantic model.
-
-    raise_errors: if True raise the exception if there is any error while invoking, return only the result as a single value (BaseModel).
-                  if False return a tuple with a success bool and the result or an error (LLMFunctionResult).
+    The prompt can be provided as a string (interpreted as a system prompt), a list of (role, message)
+    tuples, or a ChatPromptTemplate. Keyword arguments are used to build a pydantic model (unless the
+    special 'pydantic_model' argument is provided) that validates and parses the LLM's response.
     
-    Functionalities : 
-    - Ensures the output of the LLM is conform to a pydantic model.
-    - Provide the output as a pydantic instance of that model.
-    - Retry when the reply is wrong.
-    - Provide extra system prompt messages to help prevent the model from failing multiple times. TODO
-    - Provide statistics about the replies from the model if logprobs are available. TODO
-    - Provide syntactic tools to create LLM functions and pydantic models easily.
-    - Simplify the execution of batch calls (parallelized) -- from a batch of parameters.
+    The class ensures that the LLM output conforms to a pydantic model, supports automatic retries
+    on validation errors, and can return results either as a direct pydantic instance or as a tuple indicating success.
+    
+    ### Examples:
+    
+        # Function call using an external ChatPromptTemplate
 
-    Examples :
+        llmfunction = LLMFunction(llm,
+            ( 
+            "Note all the names mentioned in this conversation", 
+            "as well as the number of questions that were asked.",
+            )
+            names=["raph", ...],
+            number_of_questions=5,
+        )
 
-    # Function call using an external ChatPromptTemplate
+        conversation = ChatHistory([
+            ("sam", "bye felicia."),
+            ("sam", "{sentence}")
+        ])
 
-    llmfunction = LLMFunction(llm,
-        "Note all the names mentioned in this conversation, as well as the number of questions that were asked.",
-        names=["raph", ...],
-        number_of_questions=5,
-    )
+        (conversation | llmfunction).invoke({"sentence": "What about Henriette ?"})
 
-    conversation = ChatHistory([
-        ("sam", "bye felicia."),
-        ("sam", "{sentence}")
-    ])
+        # The llm will be called on (
+        #   "Note all the names mentioned in this conversation, 
+        # as well as the number of questions that were asked."
+        #   "sam: "bye felicia.",
+        #   "sam: "What about Henriette?"
+        # )
 
-    (conversation | llmfunction).invoke({"sentence": "What about Henriette ?"})
+        # Example of a regular call
 
-    # The llm will be called on (
-    #   "Note all the names mentioned in this conversation, as well as the number of questions that were asked."
-    #   "sam: "bye felicia.",
-    #   "sam: "What about Henriette?"
-    # )
+        llmfunction = LLMFunction(llm,
+            "How many letters are there in this word : {word}",
+            count=int,
+        )
+        llmfunction.invoke(word="blah")
 
-    # Example of a regular call
+        # Async call
 
-    llmfunction = LLMFunction(llm,
-        "How many letters are there in this word : {word}",
-        count=int,
-    )
-    llmfunction.invoke(word="blah")
-
-    # Async call
-
-    llmfunction.run_many([{"word": "strawberry"}, {"word": "banana"}])
+        llmfunction.run_many([{"word": "strawberry"}, {"word": "banana"}])
     """
     parser: OutputParser
 
     def __init__(self, 
-                 llm: Runnable, 
-                 prompt: Union[str, List[Tuple], ChatPromptTemplate] = None, 
-                 max_retries: int = 2, 
-                 use_format_instructions: bool = True,
-                 pydantic_model: BaseModel = None, 
-                 **model_options):
+            llm: Runnable, 
+            prompt: Union[str, List[Tuple], ChatPromptTemplate] = None, 
+            max_retries: int = 2, 
+            use_format_instructions: bool = True,
+            pydantic_model: BaseModel = None, 
+            **model_options
+        ):
+        """
+        Initialize an LLMFunction instance to facilitate LLM function calls.
+
+        Parameters:
+            llm (Runnable): The underlying language model or runnable.
+            prompt (str | List[Tuple] | ChatPromptTemplate, optional): The initial prompt which may be a system message,
+                a list of (role, message) tuples, or a ChatPromptTemplate.
+            max_retries (int, optional): Maximum number of retry attempts if output validation fails.
+            use_format_instructions (bool, optional): If True, prepend parser-driven format instructions to the prompt.
+            pydantic_model (BaseModel, optional): A prebuilt pydantic model for output parsing; if omitted,
+                the model is built from model_options or inferred from the function signature.
+            **model_options: Additional keyword arguments for configuring the pydantic model.
+        
+        Sets up an output parser and builds the prompt accordingly.
+        """
         
         if max_retries is None: raise ValueError("max_retries must be specified")
         self.max_retries = max_retries
