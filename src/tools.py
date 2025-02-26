@@ -23,68 +23,7 @@ from langchain_core.messages import BaseMessage, AIMessageChunk, BaseMessageChun
 
 from .helpers import run_in_parallel_event_loop, get_or_create_event_loop
 from .parsers import pydantic_model_from_options
-
-
-StreamFlags = Literal["cancel", "interrupt"]
-
-
-class StreamEvent(BaseModel):
-    """
-    An event that can be outputted by a stream.
-    """
-    pass
-
-
-class ResetStream(StreamEvent):
-    """
-    Flag raised when a stream has been reset.
-    """
-    error: str
-
-class AITextResponseChunk(StreamEvent):
-    """
-    Contains bits of the text response of the model.
-    Should be deleted if the ResetStream event is received.
-    """
-    content: str
-
-class AITextResponse(AIMessageChunk):
-    """
-    Represents completed AIMessageChunks that a LLMWithTools has emitted.
-    Behaves like an AIMessage.
-    """
-    pass
-
-class ToolCallEvent(StreamEvent):
-    """
-    Base class for all events that were triggered by a tool call.
-    """
-    pass
-
-class ToolCallInitialization(ToolCallEvent):
-    """
-    Triggered when a tool is about to be executed.
-    """
-    tool_name: str
-    args: dict
-
-class ToolCallStream(ToolCallEvent):
-    """
-    Triggered when a result is being streamed from the tool.
-    """
-    content: str
-
-class ToolCallResult(ToolCallEvent):
-    """
-    Triggered when a tool is done with a result.
-    """
-    content: str
-
-class ToolCallError(ToolCallEvent):
-    """
-    Triggered when a tool has been called and returned an error.
-    """
-    content: str
+from .events import *
 
 
 # Type conversions
@@ -212,11 +151,13 @@ class BaseTool(LangchainBaseTool, ABC):
 
             if not isinstance(result, str):
                 raise ValueError(f"The _arun() method did not return a string. Got: {result}")
-            return ToolCallResult(
-                content = result
-            )
+            return ToolCallResult(content=result, tool_name=self.name)
+        
+        except BaseInterrupt as interrupt:
+            raise interrupt
+        
         except Exception as e:
-            return ToolCallError(content=f"An exception occurred when calling the tool {self.name} : {str(e)}")
+            return ToolCallError(content=f"An exception occurred when calling the tool {self.name} : {type(e).__name__} {str(e)}", tool_name=self.name)
 
     def run(self, mixed_parameters: Optional[Union[str, Dict[str, Any], ToolCall]] = None) -> (ToolCallResult|ToolCallError):
         """
@@ -231,11 +172,13 @@ class BaseTool(LangchainBaseTool, ABC):
 
             if not isinstance(result, str):
                 raise ValueError(f"The _run() method did not return a string. Got: {result}")
-            return ToolCallResult(
-                content = result
-            )
+            return ToolCallResult(content=result, tool_name=self.name)
+        
+        except BaseInterrupt as interrupt:
+            raise interrupt
+        
         except Exception as e:
-            return ToolCallError(content=f"An exception occurred when calling the tool {self.name} : {str(e)}")
+            return ToolCallError(content=f"An exception occurred when calling the tool {self.name} : {type(e).__name__} {str(e)}", tool_name=self.name)
 
     async def astream(self, mixed_parameters: Optional[Union[str, Dict[str, Any], ToolCall]] = None) -> AsyncGenerator[ToolCallEvent, None]:
         """
@@ -253,10 +196,14 @@ class BaseTool(LangchainBaseTool, ABC):
                 if not isinstance(event, str):
                     raise ValueError(f"The _astream() method did not yield a string. Got: {event}")
                 buffer += event + "\n<next>\n"
-                yield ToolCallStream(content=event)
-            yield ToolCallResult(content=buffer)
+                yield ToolCallStream(content=event, tool_name=self.name)
+            yield ToolCallResult(content=buffer, tool_name=self.name)
+
+        except BaseInterrupt as interrupt:
+            raise interrupt
+        
         except Exception as e:
-            yield ToolCallError(content=f"An exception occurred when calling the tool {self.name} : {str(e)}")
+            yield ToolCallError(content=f"An exception occurred when calling the tool {self.name} : {type(e).__name__} {str(e)}", tool_name=self.name)
 
     def stream(self, mixed_parameters: Optional[Union[str, Dict[str, Any], ToolCall]] = None) -> Generator[ToolCallEvent, None, None]:
         """
@@ -274,10 +221,14 @@ class BaseTool(LangchainBaseTool, ABC):
                 if not isinstance(event, str):
                     raise ValueError(f"The _stream() method did not yield a string. Got: {event}")
                 buffer += event + "\n<next>\n"
-                yield ToolCallStream(content=event)
-            yield ToolCallResult(content=buffer)
+                yield ToolCallStream(content=event, tool_name=self.name)
+            yield ToolCallResult(content=buffer, tool_name=self.name)
+
+        except BaseInterrupt as interrupt:
+            raise interrupt
+        
         except Exception as e:
-            yield ToolCallError(content=f"An exception occurred when calling the tool {self.name} : {str(e)}")
+            yield ToolCallError(content=f"An exception occurred when calling the tool {self.name} : {type(e).__name__} {str(e)}", tool_name=self.name)
 
     def __str__(self):
         if self.args_schema is None:

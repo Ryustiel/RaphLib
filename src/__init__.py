@@ -6,12 +6,12 @@ import dotenv, langchain_core, pydantic_core, langchain, pydantic, langchain_ope
 # Standard Library : os, typing, logging, asyncio
 
 from .prompts import ChatHistory, ChatMessage, LangchainMessageTypes
+
 from .functions import LLMFunction, LLMFunctionResult, BatchLLMFunctionResult
-from .stream import LLMWithTools, ToolInterrupt
+
 from .stables import StableModel, pydantic_model_from_options
-from .tools import (
-    to_str_stream,
-    to_str_stream_async,
+
+from .events import (
     StreamEvent, 
     ResetStream, 
     ToolCallEvent, 
@@ -20,10 +20,17 @@ from .tools import (
     ToolCallStream, 
     AITextResponseChunk, 
     AITextResponse,
-
-    BaseTool,
-    tool,
 )
+
+from .stream import LLMWithTools, ToolInterrupt, BaseInterrupt
+
+from .tools import (
+    to_str_stream,
+    to_str_stream_async,
+    tool,
+    BaseTool,
+)
+
 from .helpers import (
     LapTimer, 
     balance_results, 
@@ -49,6 +56,7 @@ __all__ = [
     'StableModel',
     
     'ToolInterrupt', 
+    'BaseInterrupt',
     'pydantic_model_from_options',
 
     'balance_results',
