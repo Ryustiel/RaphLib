@@ -5,7 +5,7 @@ A library to handle a LLM Conversation.
 import dotenv, langchain_core, pydantic_core, langchain, pydantic, langchain_openai  # Dependencies TODO : Manage package
 # Standard Library : os, typing, logging, asyncio
 
-from .prompts import ChatHistory, ChatMessage
+from .prompts import ChatHistory, ChatMessage, LangchainMessageTypes
 from .functions import LLMFunction, LLMFunctionResult, BatchLLMFunctionResult
 from .stream import LLMWithTools, ToolInterrupt
 from .stables import StableModel, pydantic_model_from_options
@@ -39,6 +39,7 @@ from .helpers import (
 __all__ = [
     'ChatHistory', 
     'ChatMessage',
+    'LangchainMessageTypes',
 
     'LLMFunction', 
     'LLMFunctionResult', 

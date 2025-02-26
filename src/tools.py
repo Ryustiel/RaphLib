@@ -132,7 +132,7 @@ class BaseTool(LangchainBaseTool, ABC):
         class TemplateTool(BaseTool):
             name: str = "get_information"
             description: str = "Must be run once before replying to the user."
-            args_schema: Type[BaseModel] = pydantic_model_from_options(
+            args_schema: type = pydantic_model_from_options(
                 random_fruit_name=str
             )
             
@@ -141,19 +141,14 @@ class BaseTool(LangchainBaseTool, ABC):
     """
     name: str
     description: str
-    args_schema: Optional[Type[BaseModel]] = None  # Empty args schema is an "Any" type of input
+    args_schema: Optional[Type[BaseModel]] = None  # Arg schema if provided should be the only argument of _run methods
 
     def _extract_parameters(self, mixed_parameters: Optional[Union[str, dict, ToolCall]]) -> Optional[BaseModel]:
         """
         Turn the parameters into a homogeneous pydantic model to be used by the actual tool methods.
         This function can contain parsing errors.
         """
-        if self.args_schema is None:
-            if mixed_parameters is None:
-                return None
-            else:
-                raise ValueError(f"No input was expected but an input was provided : {mixed_parameters}")
-        elif isinstance(mixed_parameters, self.args_schema):  # Mixed parameters is a prebuilt schema
+        if isinstance(mixed_parameters, self.args_schema):  # Mixed parameters is a prebuilt schema
             return mixed_parameters
         elif isinstance(mixed_parameters, str):
             return self.args_schema.model_validate_json(mixed_parameters)
@@ -171,27 +166,36 @@ class BaseTool(LangchainBaseTool, ABC):
         """
         Execute the tool and return the output or errors
         """
-        return "No script was defined for this tool. You should implement one of the _arun, _run, _stream or _astream methods in the tool depending on your needs."
+        raise NotImplementedError("""
+            This tool lacks the appropriate method for the invoke context. 
+            You should implement one of the _arun, _run, _stream or _astream methods in the tool depending on your needs.
+            This error might also occur if you only defined _stream() or _astream() without defining fallback _run or _arun 
+            while calling an async ainvoke or sync invoke. _stream and _astream do not convert into one another automatically,
+            unlike _run and _arun.
+        """)
 
     # ================================================================= DEFAULT BEHAVIOR METHODS
 
     def _run(self, inp: Optional[BaseModel] = None) -> str:
+        coro = self._arun(inp=inp) if inp else self._arun()
         if get_or_create_event_loop().is_running():
-            return run_in_parallel_event_loop(future=self._arun(inp=inp))
+            return run_in_parallel_event_loop(future=coro)
         else:
-            return asyncio.run(main=self._arun(inp=inp))
+            return asyncio.run(main=coro)
 
     async def _astream(self, inp: Optional[BaseModel] = None) -> AsyncGenerator[str, None]:
         """
         Streams the tool output as stream events, asynchronously (errors, partial responses, full response).
         """
-        yield await self._arun(inp=inp)
+        coro = self._arun(inp=inp) if inp else self._arun()
+        yield await coro
 
     def _stream(self, inp: Optional[BaseModel] = None) -> Generator[str, None, None]:
         """
         Streams the tool output as stream events (errors, partial responses, full response).
         """
-        yield self._run(inp=inp)
+        result = self._run(inp=inp) if inp else self._run()
+        yield result
 
     # ================================================================= GATEWAY METHODS
 
@@ -200,8 +204,12 @@ class BaseTool(LangchainBaseTool, ABC):
         Execute the tool and return the output or errors
         """
         try:
-            inp = self._extract_parameters(mixed_parameters=mixed_parameters)
-            result = await self._arun(inp=inp)
+            if self.args_schema:
+                inp = self._extract_parameters(mixed_parameters=mixed_parameters)
+                result = await self._arun(inp=inp)
+            else:
+                result = await self._arun()
+
             if not isinstance(result, str):
                 raise ValueError(f"The _arun() method did not return a string. Got: {result}")
             return ToolCallResult(
@@ -215,9 +223,12 @@ class BaseTool(LangchainBaseTool, ABC):
         Execute the tool and return the output or errors.
         """
         try:
-            inp = self._extract_parameters(mixed_parameters=mixed_parameters)
-            
-            result = self._run(inp=inp)
+            if self.args_schema:
+                inp = self._extract_parameters(mixed_parameters=mixed_parameters)
+                result = self._run(inp=inp)
+            else:
+                result = self._run()
+
             if not isinstance(result, str):
                 raise ValueError(f"The _run() method did not return a string. Got: {result}")
             return ToolCallResult(
@@ -230,13 +241,18 @@ class BaseTool(LangchainBaseTool, ABC):
         """
         Streams the tool output as stream events, asynchronously (errors, partial responses, full response).
         """
-        buffer = ""
+        buffer = "Generator Tool Trace\n<start>\n"
         try:
-            inp = self._extract_parameters(mixed_parameters=mixed_parameters)
-            async for event in self._astream(inp=inp):
+            if self.args_schema:
+                inp = self._extract_parameters(mixed_parameters=mixed_parameters)
+                stream = self._astream(inp=inp)
+            else:
+                stream = self._astream()
+
+            async for event in stream:
                 if not isinstance(event, str):
                     raise ValueError(f"The _astream() method did not yield a string. Got: {event}")
-                buffer += event
+                buffer += event + "\n<next>\n"
                 yield ToolCallStream(content=event)
             yield ToolCallResult(content=buffer)
         except Exception as e:
@@ -246,13 +262,18 @@ class BaseTool(LangchainBaseTool, ABC):
         """
         Streams the tool output as stream events (errors, partial responses, full response).
         """
-        buffer = ""
+        buffer = "Generator Tool Trace\n<start>\n"
         try:
-            inp = self._extract_parameters(mixed_parameters=mixed_parameters)
-            for event in self._stream(inp=inp):
+            if self.args_schema:
+                inp = self._extract_parameters(mixed_parameters=mixed_parameters)
+                stream = self._stream(inp=inp)
+            else:
+                stream = self._stream()
+
+            for event in stream:
                 if not isinstance(event, str):
                     raise ValueError(f"The _stream() method did not yield a string. Got: {event}")
-                buffer += event
+                buffer += event + "\n<next>\n"
                 yield ToolCallStream(content=event)
             yield ToolCallResult(content=buffer)
         except Exception as e:
@@ -268,7 +289,7 @@ class BaseTool(LangchainBaseTool, ABC):
 # BaseTool maker decorator
 
 
-def tool(input_model: Optional[BaseModel] = None, **kwargs) -> BaseTool:
+def tool(input_model: Callable | Optional[BaseModel] = None, **kwargs) -> BaseTool:
     """
     Decorator to convert a function into a BaseTool instance.
 
@@ -288,6 +309,15 @@ def tool(input_model: Optional[BaseModel] = None, **kwargs) -> BaseTool:
         def func(inp: InputModel):
             return f"The input was {inp.parameter}"
     """
+    # @tool has two modes : factory mode and decorator mode (flagged by "input_function")
+    if callable(input_model):
+
+        input_function = input_model
+        input_model = None
+        kwargs = {}
+        
+    else:
+        input_function = None
     
     def decorator(f: Callable):
 
@@ -312,9 +342,9 @@ def tool(input_model: Optional[BaseModel] = None, **kwargs) -> BaseTool:
                 local_input_model = param.annotation
             else:
                 raise ValueError(
-                    f"Tool function '{f.__name__}' expects a parameter "
-                    "but no input_model was provided and the parameter "
-                    "lacks a type annotation to build an args_schema."
+                    f"Tool function '{f.__name__}' expects a Type[BaseModel] parameter. "
+                    "You can provide the input_model as a parameter of the @tool decorator "
+                    "or as a type annotation on that first parameter."
                 )
 
         # 5. Determine the function type (sync/async, generator, etc.)
@@ -331,27 +361,34 @@ def tool(input_model: Optional[BaseModel] = None, **kwargs) -> BaseTool:
                 f"that function \"{f.__name__}\" needs a docstring."
             )
             args_schema: type = local_input_model
-
-            print(is_async, is_gen, is_asyncgen)
                     
             if is_asyncgen:
                 async def _astream(self, inp: Optional[BaseModel] = None) -> AsyncGenerator[str, None]:
-                    async for item in f(inp):
+                    stream = f(inp) if inp else f()
+                    async for item in stream:
                         yield item
 
             elif is_gen:
                 def _stream(self, inp: Optional[BaseModel] = None) -> Generator[str, None, None]:
-                    for item in f(inp):
+                    stream = f(inp) if inp else f()
+                    for item in stream:
                         yield item
 
             if is_async:
                 async def _arun(self, inp: Optional[BaseModel] = None) -> str:
-                    return await f(inp)
+                    coro = f(inp) if inp else f()
+                    return await coro
 
             else:
                 def _run(self, inp: Optional[BaseModel] = None) -> str:
-                    return f(inp)
+                    result = f(inp) if inp else f()
+                    return result
         
         return ToolWrapper()
+    
 
-    return decorator
+    if input_function:  # Decorator mode
+        return decorator(input_function)
+        
+    else:  # Factory mode
+        return decorator

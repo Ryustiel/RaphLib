@@ -111,15 +111,35 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
         sync_mode: bool = False,
         stream_text: bool = True,
         **kwargs
-    ) -> AsyncGenerator[AITextResponse|StreamEvent, StreamFlags]:
+    ) -> AsyncGenerator[AITextResponse|StreamEvent|AIMessage, StreamFlags]:
         """
-        Stream the llm output as well as special events when tools are called.
+        This generator runs the asynchronous streaming process (implemented in astream) within the current event loop or spins up a new one using
+        an appropriate runner. It yields data as soon as they become available, using the same streaming protocol as astream.
 
-        sync_mode : whether to use the streaming's async functions or not.
-        stream_text : whether to yield chunks of llm response obtained via stream or to yield entire str responses.
-        NOTE : If stream_text is False then the streaming will yield full text messages (str) and StreamEvents.
-        If it is set to True, the streaming will yield text message chunks (str) and StreamEvents.
-        NOTE : stream_text can only be set to True if the LLM supports the .stream or .astream methods.
+        The protocol supports the following event types:
+        * AITextResponseChunk: When stream_text is True, these are incremental text outputs from the language model.
+        * AIMessage: When stream_text is False, complete output messages are yielded.
+        * StreamEvent: Additional events, such as ToolCallInitialization and ToolCallError, are yielded when tools are invoked or errors occur.
+
+        Parameters:
+        input (LanguageModelInput):
+            The input data for the language model, which is internally transformed for processing.
+        config (Optional[RunnableConfig], optional):
+            Configuration parameters to fine-tune the model's behavior.
+        stream_text (bool, optional):
+            Specifies whether to yield incremental text chunks (True) or complete responses (False).
+        **kwargs:
+            Any extra keyword arguments to be passed on to the asynchronous streaming method.
+
+        Yields:
+        Generator Events (Union[AITextResponseChunk, StreamEvent, AIMessage]):
+            The synchronous generator yields events from the streaming process, each associated with StreamFlags for additional status.
+
+        Note:
+        - This method wraps the asynchronous astream method. When the underlying event loop is already running, it uses a helper 
+            (run_in_parallel_event_loop) to ensure compatibility and correctness.
+        - If no running loop is detected, the helper will start one and consume all asynchronous events until completion.
+        - As with astream, ensure that the language model supports streaming operations suitable for the chosen mode.
         """
         prompt: ChatPromptValue = self.llm._convert_input(input)
         messages: List[BaseMessage] = prompt.to_messages()  # Extract the messages from the prompt so it's compatible with llm invoke.
@@ -152,7 +172,6 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
             messages.append(llm_response)
 
             stop_processing_tools_flag = False  # Set to True when encountering a stopping condition
-            interrupt: Optional[ToolInterrupt] = None
 
             if hasattr(llm_response, 'tool_calls') and len(llm_response.tool_calls) > 0:  # FIXME : should be done without hasattr ideally (using some AIMessage guaranteed attribute)
                 for tool_call in llm_response.tool_calls:  # NOTE : All tools must be processed and provided a response, even if it's an error.
@@ -169,7 +188,7 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
                             else:
                                 tool_result = await self.tools[tool_name].arun(tool_call)
                             messages.append(ToolMessage(content=tool_result.content, tool_call_id=tool_call["id"]))
-                            interrupt = ToolInterrupt(tool_name, tool_result=tool_result.content)
+                            raise ToolInterrupt(tool_name, tool_result=tool_result.content)
                         
                         elif n_tool_called >= self.max_tool_depth:  # INTERRUPTION BECAUSE OF RECURSION DEPTH
                             yield ToolCallError(content=f"Exceeded maximum number of tools to be called in a row ({self.max_tool_depth})")
@@ -188,6 +207,9 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
                             # Update the messages with temporary tool messages so the result is handled by the LLM.
                             n_tool_called += 1
 
+                    except ToolInterrupt as e:
+                        raise e
+
                     except Exception as e:
                         if n_consecutive_errors >= self.max_retries:
                             # Create a special error message for exceptions that are unrelated to the tool execution.
@@ -200,10 +222,6 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
                             print(f"An error occurred while running the tool : {type(e)} {str(e)}")
                             messages.append(ToolMessage(content=f"An error occurred while running the tool : {type(e)} {str(e)}", tool_call_id=tool_call["id"]))
 
-                    if interrupt:
-                        raise interrupt  # Raise the tool interrupt after the tool has been executed.
-                        # NOTE : Additional prompt components are expected to be added after the interruption has been handled.
-
             else:
                 yield llm_response
                 keep_streaming = False
@@ -213,14 +231,35 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
         config: Optional[RunnableConfig] = None, 
         stream_text: bool = True,
         **kwargs
-    ) -> Generator[BaseMessage|StreamEvent, StreamFlags, None]:
+    ) -> Generator[AITextResponseChunk|StreamEvent|AIMessage, StreamFlags, None]:
         """
-        Stream the llm output as well as special events when tools are called.
+        This generator runs the asynchronous streaming process (implemented in astream) within the current event loop or spins up a new one using
+        an appropriate runner. It yields data as soon as they become available, using the same streaming protocol as astream.
 
-        stream_text : whether to yield chunks of llm response obtained via stream or to yield entire str responses.
-        NOTE : If stream_text is False then the streaming will yield full text messages (str) and StreamEvents.
-        If it is set to True, the streaming will yield text message chunks (str) and StreamEvents.
-        NOTE : stream_text can only be set to True if the LLM supports the .stream or .astream methods.
+        The protocol supports the following event types:
+        * AITextResponseChunk: When stream_text is True, these are incremental text outputs from the language model.
+        * AIMessage: When stream_text is False, complete output messages are yielded.
+        * StreamEvent: Additional events, such as ToolCallInitialization and ToolCallError, are yielded when tools are invoked or errors occur.
+
+        Parameters:
+        input (LanguageModelInput):
+            The input data for the language model, which is internally transformed for processing.
+        config (Optional[RunnableConfig], optional):
+            Configuration parameters to fine-tune the model's behavior.
+        stream_text (bool, optional):
+            Specifies whether to yield incremental text chunks (True) or complete responses (False).
+        **kwargs:
+            Any extra keyword arguments to be passed on to the asynchronous streaming method.
+
+        Yields:
+        Generator Events (Union[AITextResponseChunk, StreamEvent, AIMessage]):
+            The synchronous generator yields events from the streaming process, each associated with StreamFlags for additional status.
+
+        Note:
+        - This method wraps the asynchronous astream method. When the underlying event loop is already running, it uses a helper 
+            (run_in_parallel_event_loop) to ensure compatibility and correctness.
+        - If no running loop is detected, the helper will start one and consume all asynchronous events until completion.
+        - As with astream, ensure that the language model supports streaming operations suitable for the chosen mode.
         """
         async_gen_instance = self.astream(input=input, config=config, stream_text=stream_text, sync_mode=True, **kwargs)
         try:
@@ -239,7 +278,7 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
         config: Optional[RunnableConfig] = None, 
         sync_mode: bool = False,
         **kwargs
-    ) -> BaseMessage:
+    ) -> AIMessage:
         """
         Run a LLM and handle tool calls automatically until a final text response with no more tool call is received.
         Return an AIMessage containing the last textual response from the LLM.
@@ -273,7 +312,7 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
         input: LanguageModelInput, 
         config: Optional[RunnableConfig] = None, 
         **kwargs
-    ) -> BaseMessage:
+    ) -> AIMessage:
         """
         Run a LLM and handle tool calls automatically until a final text response with no more tool call is received.
         Return an AIMessage containing the last textual response from the LLM.

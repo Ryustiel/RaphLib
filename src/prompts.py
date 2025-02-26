@@ -29,6 +29,7 @@ from .helpers import escape_characters
 
 MessageLike = Union[str, Union[Tuple[str, str], Tuple[Literal["human", "ai", "system"], str, str]]]
 MessageInput = Union[MessageLike, List[MessageLike]]
+LangchainMessageTypes = Literal["HumanMessage", "SystemMessage", "AIMessage", "ToolMessage"]
 
 
 class ChatMessage(BaseModel):
@@ -55,7 +56,7 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
     name: Optional[str] = "ChatHistory"  # Comes from the Runnable class. The Runnable class handles the case where name is None.
     # TODO : Stop shadowing name from Runnable
     messages: List[ChatMessage] = []
-    types: Dict[str, Literal["HumanMessage", "SystemMessage", "AIMessage", "ToolMessage"]] = {"system": "SystemMessage", "human": "HumanMessage", "ai": "AIMessage", "tool": "ToolMessage"}
+    types: Dict[str, LangchainMessageTypes] = {"system": "SystemMessage", "human": "HumanMessage", "ai": "AIMessage", "tool": "ToolMessage"}
 
 
     def size(self):
@@ -202,7 +203,7 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         raise ValueError("Invalid message format. Expected string, tuple, or a list. Got neither.")
         
 
-    def create_type(self, label: str, langchain_type: Literal["HumanMessage", "SystemMessage", "AIMessage", "ToolMessage"]) -> None:
+    def create_type(self, label: str, langchain_type: LangchainMessageTypes) -> None:
         """
         Create a new message type.
         """
