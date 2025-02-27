@@ -41,6 +41,7 @@ from .helpers import (
     repair_list,
     diff_dict,
     run_in_parallel_event_loop,
+    get_or_create_event_loop,
 )
 
 __all__ = [
@@ -64,6 +65,7 @@ __all__ = [
     'escape_characters',
     'get_all_fields_as_optional',
     'run_in_parallel_event_loop',
+    'get_or_create_event_loop',
     'repair_json',
     'repair_list',
     'diff_dict',
