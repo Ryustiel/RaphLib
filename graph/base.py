@@ -3,6 +3,7 @@ from typing import (
     Any,
     Dict,
     List,
+    Tuple,
     Set,
     TypedDict,
     TypeVar,
@@ -14,7 +15,10 @@ from typing import (
     AsyncGenerator,
     Generator,
     Type,
+    Annotated,
     get_args,
+    get_type_hints,
+    get_origin,
 )
 from pydantic import BaseModel
 from langgraph.graph.state import CompiledStateGraph
@@ -32,16 +36,35 @@ from ..src import run_in_parallel_event_loop, get_or_create_event_loop, BaseInte
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.types import Command
+from langgraph.types import Command, Interrupt, PregelTask
 
 python_next = next  # An alias to the next function
 
 
+# ============================================================================ STATE
+
+
 class BaseState(BaseModel):
-    pass
+
+    def __init_subclass__(cls, **kwargs):
+        """
+        Add annotations to set a **default update behavior** 
+        for langchain's for non annotated fields. 
+        Default is to replace the current value by the new.
+        """
+        super().__init_subclass__(**kwargs)
+        annotations = get_type_hints(cls, include_extras=True)
+        for field, field_type in annotations.items():
+            if get_origin(field_type) is not Annotated:
+                # Default behavior : Replace the current value by the new.
+                annotations[field] = Annotated[field_type, lambda _, new: new]
+        cls.__annotations__ = annotations
 
 
 State = TypeVar("State", bound=BaseState)
+
+
+# ============================================================================= EDGES
 
 
 class EdgeDescriptor(Dict[str, Set[str]]):
@@ -79,7 +102,12 @@ class EdgeDescriptor(Dict[str, Set[str]]):
                     graph.add_edge(start, end)
 
 
-# XXX : THIS WILL BE MADE INTO A PERSISTENT ITEM
+
+
+# =========================================================================== GRAPH
+
+
+
 
 class BaseGraph(Generic[State]):
     """
@@ -108,6 +136,7 @@ class BaseGraph(Generic[State]):
 
         self.__state: State = None
         self.__update_state_from_graph: bool = False  # Whether to update the state with the value from the graph
+        self.__graph_state: StateSnapshot = None
 
         if checkpointer:
             self.__checkpointer = checkpointer
@@ -129,6 +158,40 @@ class BaseGraph(Generic[State]):
             self.reset_state()
         
         return self.__state
+    
+    @property
+    def graph_state(self) -> StateSnapshot:
+        """
+        Retrieve the state of the graph itself, 
+        including the call metadata.
+        """
+        if self.__graph_state is None:
+            self.__graph_state = self.graph.get_state(self.__config)
+        return self.__graph_state
+    
+    @property
+    def tasks(self) -> Tuple[PregelTask]:
+        return self.graph_state.tasks
+    
+    @property
+    def main_task(self) -> Optional[PregelTask]:
+        tasks = self.tasks
+        if len(tasks) > 0:
+            return tasks[0]
+    
+    @property
+    def interrupt(self) -> Optional[Any]:
+        """
+        Retrieve the value of the interrupt 
+        associated with the main paused task of the graph, if there is any.
+        """
+        if self.main_task and self.main_task.interrupts:
+            return self.main_task.interrupts[0].value
+        
+    @property
+    def current_node(self) -> Optional[str]:
+        if self.main_task:
+            return self.main_task.name
 
     def reset_state(self, initialize: Dict[str, Any] = None):
         """
@@ -142,7 +205,6 @@ class BaseGraph(Generic[State]):
             for key, val in initialize:
                 setattr(self.__state, key, val)
                 
-
     @property
     def config(self) -> RunnableConfig:
         return self.__config
@@ -156,21 +218,57 @@ class BaseGraph(Generic[State]):
             )
         return self.__compiled_graph
     
-    async def astream(self, stream_mode: StreamMode = "custom") -> AsyncGenerator[Dict[str, Any], None]:
+    def reset_diagnostic_variables(self):
+        """
+        Reset variables that should be every time the graph is run or resumed.
+        """
+        self.__update_state_from_graph = True
+        self.__graph_state = None
+    
+
+
+
+    # ======================================================================================= STREAMING
+
+
+
+    
+    async def astream(
+            self, 
+            resume: Any = None, 
+            stream_mode: StreamMode = "custom"
+        ) -> AsyncGenerator[Any, None]:
         """
         Stream the graph until the next interrupt.
-        """
-        graph_run = self.graph.astream(input=self.state.model_dump(), config=self.config, stream_mode=stream_mode)
-        self.__update_state_from_graph = True
 
-        async for event in graph_run:
+        Parameters:
+            resume (Any):
+                The value to provide to the graph interrupt when resuming the call.
+            stream_mode (StreamMode):
+                A LangGraph stream mode to use instead of the default "custom" (yield values).
+        """
+        command = Command(resume=resume) if resume else Command(update=self.state.model_dump())
+                              
+        self.reset_diagnostic_variables()
+
+        async for event in self.graph.astream(input=command, config=self.config, stream_mode=stream_mode):
             yield event
 
-    def stream(self, stream_mode: StreamMode = "custom") -> Generator[Dict[str, Any], None]:
+    def stream(
+            self, 
+            resume: Any = None, 
+            stream_mode: StreamMode = "custom"
+        ) -> Generator[Any, None, None]:
         """
         Stream the graph until the next interrupt.
+
+        Parameters:
+            resume (Any):
+                The value to provide to the graph interrupt when resuming the call.
+            stream_mode (StreamMode):
+                A LangGraph stream mode to use instead of the default "custom" (yield values).
         """
-        async_gen_instance = self.astream(stream_mode=stream_mode)
+        async_gen_instance = self.astream(resume=resume, stream_mode=stream_mode)
         try:
             loop = get_or_create_event_loop()
             if loop.is_running():
@@ -186,11 +284,21 @@ class BaseGraph(Generic[State]):
         except StopAsyncIteration:
             pass
 
-    def invoke(self):
-        """
-        Executing the graph until the next interrupt.
-        """
-        pass
+    def invoke(self, resume: Any = None):
+        """Execute the graph until the next interrupt."""
+        for _ in self.stream(resume=resume): pass
+
+    async def ainvoke(self, resume: Any = None):
+        """Execute the graph until the next interrupt."""
+        async for _ in self.astream(resume=resume): pass
+
+
+
+    
+    # =============================================================================== NODE DECORATOR
+
+
+
 
     def node(self, name: Optional[str] = None, update: Optional[str | List[str]] = None, next: str | List[str] = []) -> Callable[[State], Dict[str, Any]]:
         """
@@ -210,6 +318,10 @@ class BaseGraph(Generic[State]):
             name = None
         else:
             func = None
+
+
+        # ------------------------------------------- Decorator / Inspection
+
 
         def decorator(f: Callable):
 
@@ -245,6 +357,8 @@ class BaseGraph(Generic[State]):
                     return Command(goto = output)
                 else:
                     return None
+                
+            # ---------------------------------------------------- Node Function
 
             async def node_function(s: State):
 
@@ -281,6 +395,10 @@ class BaseGraph(Generic[State]):
                 else:
                     return Command(update=value_update)
             
+
+            # ------------------------------------------- Graph Update
+
+
             # Add the edge to the graph
             if len(next) == 1:
                 self.__edges.add(local_name, next[0])
@@ -295,6 +413,10 @@ class BaseGraph(Generic[State]):
             self.__graph.add_node(node=local_name, action=node_function)
             
             return node_function
+        
+
+        # ---------------------------------------------------------------- Factory Logic
+
         
         if func:  # Decorator mode
             return decorator(func)
