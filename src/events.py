@@ -25,20 +25,6 @@ class ResetStream(StreamEvent):
     """
     error: str
 
-class AITextResponseChunk(StreamEvent):
-    """
-    Contains bits of the text response of the model.
-    Should be deleted if the ResetStream event is received.
-    """
-    content: str
-
-class AITextResponse(AIMessageChunk):
-    """
-    Represents completed AIMessageChunks that a LLMWithTools has emitted.
-    Behaves like an AIMessage.
-    """
-    pass
-
 class ToolCallEvent(StreamEvent):
     """
     Base class for all events that were triggered by a tool call.

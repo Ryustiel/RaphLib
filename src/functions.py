@@ -20,14 +20,14 @@ from pydantic import BaseModel
 from pydantic_core import ValidationError
 
 from langchain.prompts import ChatPromptTemplate
-from langchain_core.messages import BaseMessage, AIMessageChunk
+from langchain_core.messages import BaseMessage, AIMessageChunk, AIMessage
 from langchain_core.runnables.base import Runnable
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.prompt_values import PromptValue
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from .helpers import escape_characters, run_in_parallel_event_loop, get_or_create_event_loop
-from .tools import StreamEvent, ResetStream, AITextResponseChunk, AITextResponse, StreamFlags
+from .tools import StreamEvent, ResetStream, StreamFlags
 from .prompts import ChatHistory
 from .stream import ToolInterrupt, LLMWithTools
 from .stables import StableModel
@@ -282,7 +282,7 @@ class LLMFunction(Runnable):
         disable_parsing = True => delta_mode ignored.
         """
         
-        if isinstance(event, AITextResponse):
+        if isinstance(event, AIMessage):
             if disable_parsing:
                 return event, previous_result, buffer  # Confirmation event = just stream the event
             else:
@@ -290,7 +290,7 @@ class LLMFunction(Runnable):
                 new_result = self.parser.parse_partial(event.content)
                 return new_result, previous_result, buffer
 
-        elif isinstance(event, (AITextResponseChunk, AIMessageChunk)):
+        elif isinstance(event, AIMessageChunk):
             buffer += event.content
             
             if disable_parsing:

@@ -3,6 +3,7 @@ name = "RaphLib"
 version = "0.1.0"
 description = "Library for easily running structured LLM calls and managing complex prompts. Based on pydantic and langchain."
 authors = ["Raphael Nguyen <raph.nyn@gmail.com>"]
+license = {text = "MIT"}
 
 [tool.poetry.dependencies]
 python = ">=3.9,<4.0"

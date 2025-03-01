@@ -28,20 +28,20 @@ from .events import *
 
 # Type conversions
 
-def to_str_stream(stream: Generator[AITextResponseChunk|Any, None, None]) -> Generator[str, None, None]: 
+def to_str_stream(stream: Generator[AIMessageChunk|Any, None, None]) -> Generator[str, None, None]: 
     """
     Converts a MessageChunk stream to a stream of string values.
     """
     for item in stream: 
-        if isinstance(item, AITextResponseChunk):
+        if isinstance(item, AIMessageChunk):
             yield item.content
 
-async def to_str_stream_async(stream: AsyncGenerator[AITextResponseChunk|Any, None]) -> AsyncGenerator[str, None]:
+async def to_str_stream_async(stream: AsyncGenerator[AIMessageChunk|Any, None]) -> AsyncGenerator[str, None]:
     """
     Converts a MessageChunk stream to a stream of string values.
     """
     async for item in stream:
-        if isinstance(item, AITextResponseChunk):
+        if isinstance(item, AIMessageChunk):
             yield item.content
 
 

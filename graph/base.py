@@ -247,7 +247,11 @@ class BaseGraph(Generic[State]):
             stream_mode (StreamMode):
                 A LangGraph stream mode to use instead of the default "custom" (yield values).
         """
-        command = Command(resume=resume) if resume else Command(update=self.state.model_dump())
+        if self.interrupt:
+            command = Command(resume=resume, update=self.state.model_dump()) if resume else Command(resume="", update=self.state.model_dump())
+        else:
+            if resume: raise ValueError(f"The resume value {resume} was provided while the graph has no current interruption.")
+            command = Command(update=self.state.model_dump())
                               
         self.reset_diagnostic_variables()
 

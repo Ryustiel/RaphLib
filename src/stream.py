@@ -11,15 +11,14 @@ from typing import (
     Generator,
     AsyncGenerator,
 )
-from pydantic import BaseModel
-
-from langchain_core.tools import StructuredTool
-from langchain_core.prompt_values import ChatPromptValue
-from langchain_core.messages import BaseMessage, AIMessage, SystemMessage, ToolMessage
+from langchain_core.language_models import LanguageModelInput
 from langchain_core.runnables.base import Runnable
 from langchain_core.runnables.config import RunnableConfig
-from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.chat_models import BaseChatModel
+
+from langchain_core.prompt_values import ChatPromptValue
+from langchain_core.messages import BaseMessage, AIMessage, SystemMessage, ToolMessage, AIMessageChunk
+from langchain_core.messages.ai import add_ai_message_chunks
 
 from .helpers import escape_characters, run_in_parallel_event_loop, get_or_create_event_loop
 from .events import *
@@ -93,13 +92,13 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
         sync_mode: bool = False,
         stream_text: bool = True,
         **kwargs
-    ) -> AsyncGenerator[AITextResponse|StreamEvent|AIMessage, StreamFlags]:
+    ) -> AsyncGenerator[AIMessageChunk|StreamEvent|AIMessage, StreamFlags]:
         """
         This generator runs the asynchronous streaming process (implemented in astream) within the current event loop or spins up a new one using
         an appropriate runner. It yields data as soon as they become available, using the same streaming protocol as astream.
 
         The protocol supports the following event types:
-        * AITextResponseChunk: When stream_text is True, these are incremental text outputs from the language model.
+        * AIMessageChunk: When stream_text is True, these are incremental text outputs from the language model.
         * AIMessage: When stream_text is False, complete output messages are yielded.
         * StreamEvent: Additional events, such as ToolCallInitialization and ToolCallError, are yielded when tools are invoked or errors occur.
 
@@ -115,7 +114,7 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
                 Any extra keyword arguments to be passed on to the asynchronous streaming method.
 
         Yields:
-            Generator Events (Union[AITextResponseChunk, StreamEvent, AIMessage]):
+            Generator Events (Union[AIMessageChunk, StreamEvent, AIMessage]):
                 The synchronous generator yields events from the streaming process, each associated with StreamFlags for additional status.
 
         Raises:
@@ -153,20 +152,22 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
                 if sync_mode:
                     if stream_text:
                         # Streaming llm output unless it's a ToolCall
-                        llm_response = AITextResponse(content='')
+                        chunks: List[AIMessageChunk] = []
                         for chunk in self.llm.stream(messages, config, **kwargs):
-                            llm_response += chunk
-                            if chunk.content:
-                                yield AITextResponseChunk(content=chunk.content)  # Yield the text content of this chunk
+                            chunks.append(chunk)
+                            yield chunk
+                        combined_chunk = add_ai_message_chunks(chunks[0], *chunks[1:]) if len(chunks) > 1 else chunks[0]
+                        llm_response = AIMessage(**combined_chunk.model_dump(exclude=["type"]))
                     else:
                         llm_response: AIMessage = self.llm.invoke(messages, config, **kwargs)
                 else:
                     if stream_text:
-                        llm_response = AITextResponse(content='')
+                        chunks: List[AIMessageChunk] = []
                         async for chunk in self.llm.astream(messages, config, **kwargs):
-                            llm_response += chunk
-                            if chunk.content:
-                                yield AITextResponseChunk(content=chunk.content)  # Yield the text content of this chunk
+                            chunks.append(chunk)
+                            yield chunk
+                        combined_chunk = add_ai_message_chunks(chunks[0], *chunks[1:]) if len(chunks) > 1 else chunks[0]
+                        llm_response = AIMessage(**combined_chunk.model_dump(exclude=["type"]))
                     else:
                         llm_response: AIMessage = await self.llm.ainvoke(messages, config, **kwargs)
 
@@ -248,13 +249,13 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
         config: Optional[RunnableConfig] = None, 
         stream_text: bool = True,
         **kwargs
-    ) -> Generator[AITextResponseChunk|StreamEvent|AIMessage, StreamFlags, None]:
+    ) -> Generator[AIMessageChunk|StreamEvent|AIMessage, StreamFlags, None]:
         """
         This generator runs the asynchronous streaming process (implemented in astream) within the current event loop or spins up a new one using
         an appropriate runner. It yields data as soon as they become available, using the same streaming protocol as astream.
 
         The protocol supports the following event types:
-            * AITextResponseChunk: When stream_text is True, these are incremental text outputs from the language model.
+            * AIMessageChunk: When stream_text is True, these are incremental text outputs from the language model.
             * AIMessage: When stream_text is False, complete output messages are yielded.
             * StreamEvent: Additional events, such as ToolCallInitialization and ToolCallError, are yielded when tools are invoked or errors occur.
 
@@ -270,7 +271,7 @@ class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
                 Any extra keyword arguments to be passed on to the asynchronous streaming method.
 
         Yields:
-            Generator Events (Union[AITextResponseChunk, StreamEvent, AIMessage]):
+            Generator Events (Union[AIMessageChunk, StreamEvent, AIMessage]):
                 The synchronous generator yields events from the streaming process, each associated with StreamFlags for additional status.
 
         Note:

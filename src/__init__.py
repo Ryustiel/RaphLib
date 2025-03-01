@@ -3,6 +3,7 @@ A library to handle a LLM Conversation.
 """
 
 import dotenv, langchain_core, pydantic_core, langchain, pydantic, langchain_openai  # Dependencies TODO : Manage package
+from langchain_core.messages import AIMessageChunk, AIMessage
 # Standard Library : os, typing, logging, asyncio
 
 from .prompts import ChatHistory, ChatMessage, LangchainMessageTypes
@@ -18,8 +19,6 @@ from .events import (
     ToolCallError, 
     ToolCallInitialization, 
     ToolCallStream, 
-    AITextResponseChunk, 
-    AITextResponse,
 )
 
 from .stream import LLMWithTools, ToolInterrupt, BaseInterrupt
@@ -45,6 +44,9 @@ from .helpers import (
 )
 
 __all__ = [
+    'AIMessageChunk',
+    'AIMessage',
+
     'ChatHistory', 
     'ChatMessage',
     'LangchainMessageTypes',
@@ -77,8 +79,6 @@ __all__ = [
     'ToolCallError', 
     'ToolCallInitialization', 
     'ToolCallStream',
-    'AITextResponseChunk',
-    'AITextResponse',
 
     'BaseTool',
     'tool',
