@@ -82,6 +82,22 @@ class BaseTool(LangchainBaseTool, ABC):
     description: str
     args_schema: Optional[Type[BaseModel]] = None  # Arg schema if provided should be the only argument of _run methods
 
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        methods_to_check = ['_stream', '_astream', '_run', '_arun']
+        available = []
+        for name in methods_to_check:
+            base_method = getattr(BaseTool, name)
+            subclass_method = getattr(cls, name, None)
+            # If the method was overridden (i.e. is a different function)
+            if subclass_method is not None and subclass_method is not base_method:
+                available.append(name)
+        if not available:
+            raise NotImplementedError(
+                f"Subclass {cls.__name__} must override at least one of {methods_to_check}"
+            )
+        cls.available_methods = available
+
     def _extract_parameters(self, mixed_parameters: Optional[Union[str, dict, ToolCall]]) -> Optional[BaseModel]:
         """
         Turn the parameters into a homogeneous pydantic model to be used by the actual tool methods.
@@ -105,36 +121,73 @@ class BaseTool(LangchainBaseTool, ABC):
         """
         Execute the tool and return the output or errors
         """
-        raise NotImplementedError("""
-            This tool lacks the appropriate method for the invoke context. 
-            You should implement one of the _arun, _run, _stream or _astream methods in the tool depending on your needs.
-            This error might also occur if you only defined _stream() or _astream() without defining fallback _run or _arun 
-            while calling an async ainvoke or sync invoke. _stream and _astream do not convert into one another automatically,
-            unlike _run and _arun.
-        """)
+        if "_run" in self.available_methods:
+            return self._run(inp=inp) if inp else self._run(inp)
+        
+        else:  # _astream or _stream
+            event = None
+            async_gen_instance = self._astream(inp=inp) if inp else self._astream()
+            async for event in async_gen_instance:
+                pass
+            return event
 
     # ================================================================= DEFAULT BEHAVIOR METHODS
 
     def _run(self, inp: Optional[BaseModel] = None) -> str:
-        coro = self._arun(inp=inp) if inp else self._arun()
-        if get_or_create_event_loop().is_running():
-            return run_in_parallel_event_loop(future=coro)
-        else:
-            return asyncio.run(main=coro)
+
+        if "_arun" in self.available_methods:
+            coro = self._arun(inp=inp) if inp else self._arun()
+            if get_or_create_event_loop().is_running():
+                return run_in_parallel_event_loop(future=coro)
+            else:
+                return asyncio.run(main=coro)
+
+        else:  # _stream or _astream
+            event = None
+            gen_instance = self._stream(inp=inp) if inp else self._stream()
+            for event in gen_instance:
+                pass
+            return event
 
     async def _astream(self, inp: Optional[BaseModel] = None) -> AsyncGenerator[str, None]:
         """
         Streams the tool output as stream events, asynchronously (errors, partial responses, full response).
         """
-        coro = self._arun(inp=inp) if inp else self._arun()
-        yield await coro
+        if "_stream" in self.available_methods:
+
+            gen_instance = self._stream(inp=inp) if inp else self._stream()
+            for event in gen_instance:
+                yield event
+
+        else:  # _arun or _run
+            coro = self._arun(inp=inp) if inp else self._arun()
+            yield await coro
 
     def _stream(self, inp: Optional[BaseModel] = None) -> Generator[str, None, None]:
         """
         Streams the tool output as stream events (errors, partial responses, full response).
         """
-        result = self._run(inp=inp) if inp else self._run()
-        yield result
+        if "_astream" in self.available_methods:
+
+            async_gen_instance = self._astream(inp=inp) if inp else self._astream()
+            try:
+                loop = get_or_create_event_loop()
+                if loop.is_running():
+                    while True: 
+                        yield run_in_parallel_event_loop(future=async_gen_instance.__anext__())
+                else:
+                    while True: 
+                        yield loop.run_until_complete(future=async_gen_instance.__anext__())
+
+            except BaseInterrupt as interrupt:
+                raise interrupt
+        
+            except StopAsyncIteration:
+                pass
+
+        else:  # _run or _arun
+            result = self._run(inp=inp) if inp else self._run()
+            yield result
 
     # ================================================================= GATEWAY METHODS
 
@@ -325,7 +378,7 @@ def tool(input_model: Callable | Optional[BaseModel] = None, **kwargs) -> BaseTo
                     for item in stream:
                         yield item
 
-            if is_async:
+            elif is_async:
                 async def _arun(self, inp: Optional[BaseModel] = None) -> str:
                     coro = f(inp) if inp else f()
                     return await coro

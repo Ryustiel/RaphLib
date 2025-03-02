@@ -2,7 +2,6 @@
 Provide additional utility functions for managing a LLM conversation prompt.
 This is designed to work on top of langchain's current capabilities.
 """
-from pydantic import BaseModel
 from typing import (
     Any, 
     List, 
@@ -13,6 +12,7 @@ from typing import (
     Literal,
     Optional,
 )
+from pydantic import BaseModel
 from langchain_core.messages import (
     BaseMessage,
     SystemMessage,
@@ -20,16 +20,17 @@ from langchain_core.messages import (
     AIMessage,
     ToolMessage,
 )
-from langchain_core.prompts.chat import ChatPromptTemplate, MessageLikeRepresentation
+from langchain_core.prompts.chat import ChatPromptTemplate
 from langchain_core.runnables.base import Runnable
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.prompt_values import PromptValue
 
-from .helpers import escape_characters
-
 MessageLike = Union[str, Union[Tuple[str, str], Tuple[Literal["human", "ai", "system"], str, str]]]
 MessageInput = Union[MessageLike, List[MessageLike]]
 LangchainMessageTypes = Literal["HumanMessage", "SystemMessage", "AIMessage", "ToolMessage"]
+
+from datetime import datetime
+from .helpers import escape_characters
 
 
 class ChatMessage(BaseModel):
@@ -38,9 +39,14 @@ class ChatMessage(BaseModel):
     """
     type: str
     content: str
+    date: datetime
+
+    def __init__(self, type: str, content: str, date: datetime = None):
+        date = date or datetime.now()
+        super().__init__(type=type, content=content, date=date)
 
     def create_copy(self, type: str):
-        return ChatMessage(type=type, content=self.content)
+        return ChatMessage(type=type, content=self.content, date=self.date)
     
     def as_typed_message(self):
         """
@@ -533,7 +539,7 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
         their own metadata handling in their implementation of the _to_message_like() method.
         If include_metadata is True, include metadata like last_inserted and current_channel in the message.
         """
-        if include_metadata:
+        if include_metadata:  # TODO : Make it compatible with the new dates
             new_messages = [
                 ChatMessage(type=metadata[0], content=metadata[1])
                 for metadata in self.as_message_like()
@@ -541,7 +547,7 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
             
         else:
             new_messages = [
-                ChatMessage(type=msg.type, content=msg.content)
+                ChatMessage(type=msg.type, content=msg.content, date=msg.date)
                 for msg in self.messages
             ]
 
@@ -573,117 +579,3 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
     
     def pretty_print(self, input: dict = {}, config: Optional[RunnableConfig] = None, **kwargs):
         print(self.pretty(input, config, **kwargs))
-
-
-
-
-
-
-
-# Example Usage
-if __name__ == "__main__":
-    message = ChatMessage(type="system", content="Welcome to the chat history!")
-    chat = ChatHistory(messages=[message])
-
-    jsond = chat.model_dump_json()
-    print(jsond, type(jsond))
-
-    chat2 = ChatHistory.model_validate_json(jsond)
-    print(chat2.model_dump())
-
-    print("===== ChatHistory Testing =====\n")
-
-    # 1. Create initial messages.
-    message1 = ChatMessage(type="system", content="System initialized.")
-    message2 = ChatMessage(type="human", content="Hello, how are you?")
-    message3 = ChatMessage(type="ai", content="I'm doing well, thank you for asking!")
-    
-    # 2. Initialize ChatHistory and append initial messages.
-    chat = ChatHistory(messages=[message1, message2, message3])
-    print("\n==== Initial ChatHistory ====")
-    print(chat)
-
-    # 3. Append new messages using different formats.
-    chat.append('AIMessage', "assistant", "I'm an AI assistant.")
-    chat.append("Hello world!")  # Defaults to human message
-    print("\n==== ChatHistory after append ====")
-    print(chat)
-
-    # 4. Insert new messages at a specific position.
-    chat.insert(1, 'system', "Reminding you about our policies")
-    print("\n==== ChatHistory after insert ====")
-    print(chat)
-
-    # 5. Remove a message (pop) from the end and display the history.
-    chat.pop()
-    print("\n==== ChatHistory after pop ====")
-    print(chat)
-
-    # 6. Replace a message type in the entire history.
-    chat.replace({"human": "ai"})
-    print("\n==== ChatHistory after replace (human -> ai) ====")
-    print(chat)
-
-    # 7. Restrict the history to only AI messages.
-    chat.restrict(["ai"])
-    print("\n==== ChatHistory after restrict (only ai) ====")
-    print(chat)
-
-    # 8. Add new types and modify.
-    chat.create_type("agent", "ToolMessage")
-    chat.create_type("operator", "HumanMessage")
-    chat.append("agent", "These are tool-based test messages.")
-    chat.append("operator", "This is a message from the operator.")
-    print("\n==== ChatHistory after adding new types (agent, operator) ====")
-    print(chat)
-
-    # 9. Test the without() by removing 'system' type messages.
-    chat.without(['system'])
-    print("\n==== ChatHistory after without ('system') ====")
-    print(chat)
-
-    # 10. Test overwrite function by replacing a range of messages.
-    chat.overwrite(("ai", "Hello again!"), 0, 2)
-    print("\n==== ChatHistory after overwrite (first 2 messages) ====")
-    print(chat)
-
-    # 11. Display chat history as base messages (convert to LangChain format).
-    base_messages = chat.as_base_message()
-    print("\n==== ChatHistory as base messages (LangChain format) ====")
-    for msg in base_messages:
-        print(f"Type: {msg.__class__.__name__}, Content: {msg.content}")
-
-    # 12. Test deep copy.
-    chat_copy = chat.copy()
-    chat_copy.append("system", "This is a system message in the copied chat.")
-    print("\n==== Original ChatHistory ====")
-    print(chat)
-    print("\n==== Copied ChatHistory after modifications ====")
-    print(chat_copy)
-
-    # 13. Test history dump and restore using JSON.
-    json_dump = chat.model_dump_json()
-    print("\n==== ChatHistory JSON Dump ====")
-    print(json_dump)
-
-    chat_restored = ChatHistory.model_validate_json(json_dump)
-    print("\n==== Restored ChatHistory from JSON ====")
-    print(chat_restored)
-
-    # 14. Interval-based delete and overwrite.
-    chat.delete_interval(1, 3)
-    print("\n==== ChatHistory after deleting messages from index 1 to 3 ====")
-    print(chat)
-
-    chat.overwrite([('AIMessage', 'blahtor', 'This is an overwrite test')], 0, 1)
-    print("\n==== ChatHistory after overwriting index 0 ====")
-    print(chat)
-
-    # 15. Invoke ChatPromptTemplate with a specific input.
-    chat3 = ChatHistory()
-    chat3.append([
-        ('system', 'Hello {name}. Please perform the following task : {task}'), 
-        ('ai', 'Hello {name}. No.'), 
-        ('john', 'Please, if you do this I will give you {gift}.')
-    ])
-    print(chat3.invoke({'name': 'John', 'task': 'complete the task', 'gift': 'a gift'}))
