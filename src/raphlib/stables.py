@@ -61,6 +61,7 @@ class StableModel(BaseModel):
         try:
             return cls.model_validate_json(repaired_json)
         except ValidationError as e:
+            print(f"Repaired Json : {repaired_json} | Trucated Json : {trucated_json}")
             raise e
        
     @classmethod

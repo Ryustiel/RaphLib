@@ -297,12 +297,11 @@ def repair_json(truncated_json: str) -> str:
             return EMPTY_JSON
         
         else:
-            # Step 1: Remove any json``` pattern that is recurrent on those outputs. This is only for json outputs.
-            if repaired_json[0] == '`':
-                if len(repaired_json) < 8:
-                    return EMPTY_JSON
-                else:
-                    repaired_json = repaired_json[7:]  # Cut off the json``` structure
+            # Step 1: Remove markdown JSON delimiters if present.
+            if repaired_json.startswith("```json"):
+                repaired_json = repaired_json[len("```json"):].strip()
+                if repaired_json.endswith("```"):
+                    repaired_json = repaired_json[:-3].strip()
             
             if repaired_json[-1] == '.':
                 repaired_json  = repaired_json[:-1]

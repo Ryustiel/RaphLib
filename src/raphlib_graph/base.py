@@ -32,7 +32,7 @@ from abc import abstractmethod
 import asyncio
 import inspect
 
-from ..src import run_in_parallel_event_loop, get_or_create_event_loop, BaseInterrupt
+from ..raphlib import run_in_parallel_event_loop, get_or_create_event_loop, BaseInterrupt
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver

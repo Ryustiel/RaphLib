@@ -6,10 +6,10 @@ __version__ = "1.0.0"
 
 success = False
 try:
-    from src import *
+    from src.raphlib import *
 except ModuleNotFoundError as e:
     try:
-        from .src import *
+        from .src.raphlib import *
         success = True
     except Exception as f:
         raise f

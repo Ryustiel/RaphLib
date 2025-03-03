@@ -28,7 +28,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from .helpers import escape_characters, run_in_parallel_event_loop, get_or_create_event_loop
 from .tools import StreamEvent, ResetStream, StreamFlags
-from .prompts import ChatHistory
+from .chat import ChatHistory
 from .stream import ToolInterrupt, LLMWithTools
 from .stables import StableModel
 from .parsers import OutputParser
@@ -281,16 +281,8 @@ class LLMFunction(Runnable):
 
         disable_parsing = True => delta_mode ignored.
         """
-        
-        if isinstance(event, AIMessage):
-            if disable_parsing:
-                return event, previous_result, buffer  # Confirmation event = just stream the event
-            else:
-                # Ignore delta mode, buffer and all, just take the "result" message as it is and parse it into a result
-                new_result = self.parser.parse_partial(event.content)
-                return new_result, previous_result, buffer
 
-        elif isinstance(event, AIMessageChunk):
+        if isinstance(event, AIMessageChunk):
             buffer += event.content
             
             if disable_parsing:
@@ -302,6 +294,14 @@ class LLMFunction(Runnable):
                 else:
                     new_result = self.parser.parse_partial(buffer)
                     return new_result, previous_result, buffer
+                
+        elif isinstance(event, AIMessage):
+            if disable_parsing:
+                return event, previous_result, buffer  # Confirmation event = just stream the event
+            else:
+                # Ignore delta mode, buffer and all, just take the "result" message as it is and parse it into a result
+                new_result = self.parser.parse_partial(event.content)
+                return new_result, previous_result, buffer
 
         elif isinstance(event, ResetStream):
             # Reset the buffer
@@ -383,7 +383,7 @@ class LLMFunction(Runnable):
             except ValidationError as err:
                 local_prompt.append("system", str(err))  # Add error to the local prompt so that the LLM won't make the same error
                 error_messages.append(str(err))  # Keep track of the error so that they can be returned at the end
-                logging.error("\n\nERROR\n\n", str(err), "\n\nBUFFER STATE\n\n", buffer, "\n\n")
+                logging.error(f"\n\nERROR\n\n{err}\n\nBUFFER STATE\n\n{buffer} of size {len(buffer)}\n\n")
                 yield ResetStream(error=str(err))
 
             current_retry_count += 1

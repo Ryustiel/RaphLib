@@ -6,7 +6,7 @@ import dotenv, langchain_core, pydantic_core, langchain, pydantic, langchain_ope
 from langchain_core.messages import AIMessageChunk, AIMessage
 # Standard Library : os, typing, logging, asyncio
 
-from .prompts import ChatHistory, ChatMessage, LangchainMessageTypes
+from .chat import ChatHistory, ChatMessage, LangchainMessageTypes
 
 from .functions import LLMFunction, LLMFunctionResult, BatchLLMFunctionResult
 
