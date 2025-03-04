@@ -43,6 +43,8 @@ from .helpers import (
     get_or_create_event_loop,
 )
 
+from . import graph
+
 __all__ = [
     'AIMessageChunk',
     'AIMessage',
@@ -85,4 +87,6 @@ __all__ = [
 
     'to_str_stream',
     'to_str_stream_async',
+
+    'graph',
 ]
