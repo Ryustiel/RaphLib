@@ -8,7 +8,7 @@ from typing import (
 from pydantic import BaseModel
 from langchain.chat_models.base import BaseChatModel
 
-from ..raphlib import ChatHistory, LLMFunction, LLMWithTools, LangchainMessageTypes, BaseTool
+from .. import ChatHistory, LLMFunction, LLMWithTools, LangchainMessageTypes, BaseTool
 
 from .base import (
     BaseGraph, 
