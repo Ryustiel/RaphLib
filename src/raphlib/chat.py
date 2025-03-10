@@ -29,7 +29,7 @@ MessageLike = Union[str, Union[Tuple[str, str], Tuple[Literal["human", "ai", "sy
 MessageInput = Union[MessageLike, List[MessageLike]]
 LangchainMessageTypes = Literal["HumanMessage", "SystemMessage", "AIMessage", "ToolMessage"]
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from .helpers import escape_characters
 
 
@@ -53,6 +53,11 @@ class ChatMessage(BaseModel):
         Return a new message that include information about the message type.
         """
         return f"{self.type}: {self.content}"
+    
+    def __eq__(self, other: "ChatMessage") -> bool:
+        if isinstance(other, ChatMessage):
+            return self.type == other.type and self.content == other.content and abs(self.date - other.date) < timedelta(seconds=1)
+        return NotImplemented
 
 
 class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on the {'messages': List[dict], 'types': Dict} structure.
@@ -73,6 +78,17 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
     
     def __len__(self):
         return len(self.messages)
+    
+    def __contains__(self, other: Union[ChatMessage, "ChatHistory"]) -> bool:
+        if isinstance(other, ChatMessage):
+            for message in self.messages:
+                if other == message:
+                    return True
+            return False
+        elif isinstance(other, ChatHistory):
+            return all([msg in self for msg in other.messages])
+        else:
+            raise NotImplemented
 
 
     def _select_messages(self, start_index: int, end_index: int) -> List[ChatMessage]:
@@ -236,15 +252,27 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
 
     def remove(
         self,
-        types_to_remove: List[str]
+        types_to_remove: List[str] | 'ChatHistory',
     ) -> 'ChatHistory':
         """
-        Remove messages of the specified types in-place.
+        Remove the specified messages or messages of the specified types.
+
+        Parameters:
+            types_to_remove (List[str], ChatHistory):
+                The list of types to remove from the ChatHistory.
+                If provided another instance of ChatHistory, 
+                delete the messages the two have in common.
         """
-        self.messages = [
-            msg for msg in self.messages 
-            if msg.type not in types_to_remove
-        ]
+        if isinstance(types_to_remove, ChatHistory):
+            self.messages = [
+                msg for msg in self.messages 
+                if msg not in types_to_remove.messages
+            ]
+        else:
+            self.messages = [
+                msg for msg in self.messages 
+                if msg.type not in types_to_remove
+            ]
         return self
 
     def restrict(
@@ -285,12 +313,18 @@ class ChatHistory(BaseModel, Runnable):  # TODO : Make it serializable, based on
 
     def without(
         self,
-        types_to_remove: List[str],
+        types_to_exclude: List[str] | "ChatHistory",
     ) -> 'ChatHistory':
         """
-        Return a copy without the specified message types.
+        Return a copy without the specified messages or types.
+
+        Parameters:
+            types_to_exclude (List[str], ChatHistory):
+                The list of types to remove from the ChatHistory.
+                If provided another instance of ChatHistory, 
+                exclude the messages the two have in common.
         """
-        return self.copy().remove(types_to_remove)
+        return self.copy().remove(types_to_exclude)
 
     def only(
         self,
