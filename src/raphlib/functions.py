@@ -486,10 +486,7 @@ class LLMFunction(Runnable):
             errors = "\n"
 
             if any(lr is None or not lr.success for lr in results):
-                errors += "\n".join(
-                    f"Error in task {i}: {'Other error' if lr is None else lr.result}" if lr is None or not lr.success else f"Task {i} completed successfully"
-                    for i, lr in enumerate(results)
-                ) 
+                errors += "\n".join(f"Error in task {i}: {'Other error' if lr is None else lr.result}" if lr is None or not lr.success else f"Task {i} completed successfully" for i, lr in enumerate(results)) 
                 raise Exception(errors)
             
             return [res.result for res in results]  # List[BaseModel]
