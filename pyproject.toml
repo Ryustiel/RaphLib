@@ -15,8 +15,14 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[tool.poetry]  # Required for Poetry-specific settings
-packages = [{ include = "raphlib", from = "src" }]
+[tool.hatch.build.targets.sdist]
+include = ["src/raphlib"]
+
+[tool.hatch.build.targets.wheel]
+include = ["src/raphlib"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src/raphlib" = "raphlib"

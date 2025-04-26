@@ -1,5 +1,2 @@
-.env
-__pycache__
-.venv
-
-.codegpt
+*__pycache__*
+*.pyc

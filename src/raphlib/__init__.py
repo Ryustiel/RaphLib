@@ -2,6 +2,11 @@
 A library to handle a LLM Conversation.
 """
 
+__author__ = "Raphael Nguyen"
+__copyright__ = "© 2025 Raphael Nguyen"
+__license__ = "MIT"
+__version__ = "1.0.0"
+
 import dotenv, langchain_core, pydantic_core, langchain, pydantic, langchain_openai  # Dependencies TODO : Manage package
 from langchain_core.messages import AIMessageChunk, AIMessage
 # Standard Library : os, typing, logging, asyncio
