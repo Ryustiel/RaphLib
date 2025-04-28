@@ -7,7 +7,7 @@ __copyright__ = "© 2025 Raphael Nguyen"
 __license__ = "MIT"
 __version__ = "1.0.0"
 
-import dotenv, langchain_core, pydantic_core, langchain, pydantic, langchain_openai  # Dependencies TODO : Manage package
+import langchain_core, pydantic_core, langchain, pydantic  # Dependencies TODO : Manage package
 from langchain_core.messages import AIMessageChunk, AIMessage
 # Standard Library : os, typing, logging, asyncio
 
