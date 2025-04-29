@@ -1,4 +1,4 @@
-from graph import *
+from packages.raphlib.src.examples.alternatives.old_graph import *
 import asyncio
 
 thread = {"configurable": {"thread_id": "28"}}

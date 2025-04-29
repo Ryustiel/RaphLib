@@ -1,4 +1,4 @@
-from graph import *
+from packages.raphlib.src.examples.alternatives.old_graph import *
 
 thread = {"configurable": {"thread_id": "3"}}
 GRAPH.update_state(config=thread, values=DEFAULT_STATE)
