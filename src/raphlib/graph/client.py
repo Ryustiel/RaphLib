@@ -112,9 +112,10 @@ class RemoteGraphClient(GraphClient):
         if isinstance(state, pydantic.BaseModel):
             state = state.model_dump()
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5, read=60)) as client:
 
-            response = await client.post(
+            async with client.stream(
+                "POST",
                 self.url + "/runs/stream", 
                 json = {
                     "assistant_id": assistant_id,
@@ -126,26 +127,29 @@ class RemoteGraphClient(GraphClient):
                     "stream_mode": ["custom", "values"],
                 }, 
                 headers = {"Content-Type": "application/json"}
-            )
+            ) as response:
 
-            output_state: str = ""
-            async for line in response.aiter_lines():
-                
-                if line and line.startswith("data:"):
+                output_state: str = ""
+                async for line in response.aiter_lines():
+                    
+                    if line and line.startswith("data:"):
+                            
+                        if line[6] == "\"":  # Is a data and a custom event, not metadata
                         
-                    if line[6] == "\"":  # Is a data and a custom event, not metadata
-                    
-                        chunk = line[7:-1]
-                        yield chunk
-                    
-                    elif line[6] == "{":
-                        output_state = line[6:]
-                            
-            if output_state is not None:
-                self.process_new_state(json.loads(output_state))
-            else:
-                raise RuntimeError("RemoteGraphClient: no output state received.")
-                            
+                            chunk = line[7:-1]
+                            yield chunk
+                        
+                        elif line[6] == "{":
+                            output_state = line[6:]
+                                
+                if output_state is not None:
+                    json_output_state = json.loads(output_state)
+                    if "error" in json_output_state:
+                        raise RuntimeError(f"RemoteGraphClient: error in the graph: {json_output_state['error']}: {json_output_state['message']}")
+                    self.process_new_state(json_output_state)
+                else:
+                    raise RuntimeError("RemoteGraphClient: no output state received.")
+                                
             
             
 class PersistentGraphClient(GraphClient):
