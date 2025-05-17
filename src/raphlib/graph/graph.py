@@ -32,8 +32,7 @@ class GraphBuilder(Generic[State]):
     """
     An interface for creating LangGraph systems easily.
     """
- 
- 
+
     def __init__(self, start: str, state: Type[State]):
         """
         Parameters:

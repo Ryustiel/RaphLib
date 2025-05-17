@@ -28,7 +28,7 @@ from .events import (
 
 from .stream import LLMWithTools, ToolInterrupt, BaseInterrupt
 
-from .tools import (
+from .tools_old import (
     to_str_stream,
     to_str_stream_async,
     tool,
@@ -48,7 +48,7 @@ from .helpers import (
     get_or_create_event_loop,
 )
 
-from . import graph
+from . import graph, tools
 
 __all__ = [
     'AIMessageChunk',

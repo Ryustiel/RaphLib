@@ -27,7 +27,7 @@ from langchain_core.prompt_values import PromptValue
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from .helpers import escape_characters, run_in_parallel_event_loop, get_or_create_event_loop
-from .tools import StreamEvent, ResetStream, StreamFlags
+from .tools_old import StreamEvent, ResetStream, StreamFlags
 from .chat import ChatHistory
 from .stream import ToolInterrupt, LLMWithTools
 from .stables import StableModel

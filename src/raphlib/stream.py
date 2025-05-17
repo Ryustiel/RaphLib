@@ -22,7 +22,7 @@ from langchain_core.messages.ai import add_ai_message_chunks
 
 from .helpers import escape_characters, run_in_parallel_event_loop, get_or_create_event_loop
 from .events import *
-from .tools import BaseTool
+from .tools_old import BaseTool
 
 
 class LLMWithTools(Runnable[LanguageModelInput, BaseMessage]):
