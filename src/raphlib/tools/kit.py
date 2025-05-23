@@ -1,14 +1,23 @@
 
-from typing import List, Dict, Any, Callable, Optional, Iterator, AsyncIterator
+from typing import List, Dict, Tuple, Any, Callable, Optional, Iterator, AsyncIterator
 import pydantic, asyncio, inspect
 
 from .tool import BaseTool, ToolMessage, ToolCall
+
+def create_model(name: str, signature: inspect.Signature) -> pydantic.BaseModel:
+    """Create a Pydantic model from a function signature."""
+    fields: Dict[str, Tuple[type, ellipsis]] = {}
+    for param in signature.parameters.values():
+        if param.annotation is inspect.Parameter.empty:
+            raise ValueError(f"Parameter {param.name} has no type annotation")
+        else:
+            fields[param.name] = (param.annotation, ...)
+    return pydantic.create_model(name, **fields)
 
 class ToolKit(pydantic.BaseModel):
     """
     A collection of tools for a LLM.
     """
-    
     tools: Dict[str, BaseTool] = {}
     
     def __getitem__(self, key: str, default: Any = None) -> BaseTool:
@@ -17,15 +26,14 @@ class ToolKit(pydantic.BaseModel):
     def __setitem__(self, key: str, value: BaseTool) -> None:
         self.tools[key] = value
         
-    def __in__(self, reference: Any):
+    def __in__(self, reference: BaseTool) -> bool:
         return reference in self.tools.values()
     
-    def itertools(self) -> Iterator[BaseTool]:
-        """
-        Iterate over the tools in the toolkit.
-        """
-        for tool in self.tools.values():
-            yield tool
+    def __iter__(self):
+        return iter(self.tools.values())
+    
+    def __call__(self, calls: List[ToolCall]) -> List[ToolMessage]:
+        return self.run(calls)
             
     def run(self, calls: List[ToolCall]) -> List[ToolMessage]:
         return [self.tools[call["name"]].run(call) for call in calls]
@@ -49,27 +57,14 @@ class ToolKit(pydantic.BaseModel):
             @tool
             def func(inp: InputModel):
                 return f"The input was {inp.parameter}"
-        """        
+        """
         # Inspect the function signature to ensure it has zero or one parameter.
         sig = inspect.signature(f)
-        if len(sig.parameters) > 1:
-            
-            # TODO : Build pydantic model from the function signature
-            raise ValueError("Tool function must have zero or one parameter, which must be an instance of BaseModel (or annotated with one).")
-
+        if sig.parameters:
+            input_model = create_model(f.__name__, sig)
         else:
-            # Get the unique parameter, if any.
-            param = next(iter(sig.parameters.values()), None)
-
-            # If no input model (and no keyword schema options) is provided, try to derive args_schema from the parameter's type.
-            if param is None:
-                input_model = None
-            else:
-                if param.annotation is not inspect.Parameter.empty:
-                    input_model = param.annotation
-                else:  # Parameter has not been annotated
-                    raise ValueError(f"Tool function '{f.__name__}' only expects annotated attributes, potentially a single parameter of type BaseModel.")
-
+            input_model = None
+        
         # Determine the function type (sync/async, generator, etc.)
         is_async = asyncio.iscoroutinefunction(f)
         is_gen = inspect.isgeneratorfunction(f)
@@ -87,25 +82,26 @@ class ToolKit(pydantic.BaseModel):
                     
             if is_asyncgen:
                 async def _astream(self, inp: Optional[pydantic.BaseModel] = None) -> AsyncIterator[str]:
-                    stream = f(inp) if inp else f()
+                    stream = f(**inp.model_dump()) if inp else f()
                     async for item in stream:
-                        yield item
+                        yield str(item)
 
             elif is_gen:
                 def _stream(self, inp: Optional[pydantic.BaseModel] = None) -> Iterator[str]:
-                    stream = f(inp) if inp else f()
+                    stream = f(**inp.model_dump()) if inp else f()
                     for item in stream:
-                        yield item
+                        yield str(item)
 
             elif is_async:
                 async def _arun(self, inp: Optional[pydantic.BaseModel] = None) -> str:
-                    coro = f(inp) if inp else f()
-                    return await coro
+                    coro = f(**inp.model_dump()) if inp else f()
+                    result = await coro
+                    return str(result)
 
             else:
                 def _run(self, inp: Optional[pydantic.BaseModel] = None) -> str:
-                    result = f(inp) if inp else f()
-                    return result
+                    result = f(**inp.model_dump()) if inp else f()
+                    return str(result)
         
         # Bind to tool kit and return as a BaseTool instance.
         self.tools[f.__name__] = ToolWrapper()
