@@ -136,10 +136,7 @@ class GraphBuilder(Generic[State]):
                 else:
                     command = extract_command(f(s))
 
-                if isinstance(s, pydantic.BaseModel):
-                    value_update = {key: getattr(s, key) for key in update} if update else s.model_dump()
-                else:  # Typed Dict or similar
-                    value_update = {key: s[key] for key in update} if update else s
+                value_update = {key: getattr(s, key) for key in update} if update else s.model_dump()
 
                 if command:
                     return command.__replace__(update=value_update)

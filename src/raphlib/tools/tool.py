@@ -95,8 +95,10 @@ class BaseTool(LangchainBaseTool, ABC):
             return self.args_schema.model_validate(mixed_parameters.to_dict())
         else:
             raise ValueError(f"Unsupported parameters format. Expected str, dict, or ToolCall. Instead got {type(mixed_parameters).__name__}.")
-    
-    async def _arun(self, inp: Optional[pydantic.BaseModel] = None) -> str:
+
+    # ================================================================= DEFAULT BEHAVIOR METHODS
+
+    async def _arun(self, inp: Optional[pydantic.BaseModel] = None) -> Any:
         """
         Execute the tool and return the output or errors
         """
@@ -110,9 +112,7 @@ class BaseTool(LangchainBaseTool, ABC):
                 pass
             return event
 
-    # ================================================================= DEFAULT BEHAVIOR METHODS
-
-    def _run(self, inp: Optional[pydantic.BaseModel] = None) -> str:
+    def _run(self, inp: Optional[pydantic.BaseModel] = None) -> Any:
 
         if "_arun" in self.available_methods:
             coro = self._arun(inp=inp) if inp else self._arun()
@@ -128,7 +128,7 @@ class BaseTool(LangchainBaseTool, ABC):
                 pass
             return event
 
-    async def _astream(self, inp: Optional[pydantic.BaseModel] = None) -> AsyncIterator[str]:
+    async def _astream(self, inp: Optional[pydantic.BaseModel] = None) -> AsyncIterator[Any]:
         """
         Streams the tool output as stream events, asynchronously (errors, partial responses, full response).
         """
@@ -142,7 +142,7 @@ class BaseTool(LangchainBaseTool, ABC):
             coro = self._arun(inp=inp) if inp else self._arun()
             yield await coro
 
-    def _stream(self, inp: Optional[pydantic.BaseModel] = None) -> Iterator[str]:
+    def _stream(self, inp: Optional[pydantic.BaseModel] = None) -> Iterator[Any]:
         """
         Streams the tool output as stream events (errors, partial responses, full response).
         """
@@ -178,21 +178,18 @@ class BaseTool(LangchainBaseTool, ABC):
                 result = await self._arun(inp=inp)
             else:
                 result = await self._arun()
-
-            if not isinstance(result, ToolCall):
-                raise ValueError(f"The _arun() method did not return a string. Got: {type(result)} {result}")
             
             return ToolMessage(
                 tool_call_id = self._extract_tool_call_id(mixed_parameters=mixed_parameters),
                 status = "success",
-                content = result,
+                content = str(result),
             )
         
         except Exception as e:
             return ToolMessage(
                 tool_call_id = self._extract_tool_call_id(mixed_parameters=mixed_parameters),
                 status = "error",
-                content = f"Exception {type(e).__name__}: {e}\nTraceback: {traceback.format_stack()}"
+                content = " ".join(traceback.format_exception(type(e), e, e.__traceback__))
             )
             
     def run(self, mixed_parameters: Optional[Union[str, Dict[str, Any], ToolCall]] = None) -> ToolMessage:
@@ -205,21 +202,18 @@ class BaseTool(LangchainBaseTool, ABC):
                 result = self._run(inp=inp)
             else:
                 result = self._run()
-
-            if not isinstance(result, str):
-                raise ValueError(f"The _run() method did not return a string. Got: {result}")
             
             return ToolMessage(
                 tool_call_id = self._extract_tool_call_id(mixed_parameters=mixed_parameters),
                 status = "success",
-                content = result,
+                content = str(result),
             )
         
         except Exception as e:
             return ToolMessage(
                 tool_call_id = self._extract_tool_call_id(mixed_parameters=mixed_parameters),
                 status = "error",
-                content = f"Exception {type(e).__name__}: {e}\nTraceback: {traceback.format_stack()}"
+                content = " ".join(traceback.format_exception(type(e), e, e.__traceback__))
             )
             
     async def astream(self, mixed_parameters: Optional[Union[str, Dict[str, Any], ToolCall]] = None) -> AsyncIterator[ToolMessageChunk | ToolMessage]:
@@ -238,20 +232,17 @@ class BaseTool(LangchainBaseTool, ABC):
 
             async for event in stream:
                 
-                if not isinstance(event, str):
-                    raise ValueError(f"The _astream() method did not yield a string. Got: {event}")
-                
                 yield ToolMessageChunk(
                     tool_call_id = tool_call_id,
                     status = "success",
-                    content = event,
+                    content = str(event),
                 )
         
         except Exception as e:
             yield ToolMessage(
                 tool_call_id = self._extract_tool_call_id(mixed_parameters=mixed_parameters),
                 status = "error",
-                content = f"Exception {type(e).__name__}: {e}\nTraceback: {traceback.format_stack()}"
+                content = " ".join(traceback.format_exception(type(e), e, e.__traceback__))
             )
             
     def stream(self, mixed_parameters: Optional[Union[str, Dict[str, Any], ToolCall]] = None) -> Iterator[ToolMessageChunk | ToolMessage]:
@@ -270,20 +261,17 @@ class BaseTool(LangchainBaseTool, ABC):
 
             for event in stream:
                 
-                if not isinstance(event, str):
-                    raise ValueError(f"The _stream() method did not yield a string. Got: {event}")
-                
                 yield ToolMessageChunk(
                     tool_call_id = tool_call_id,
                     status = "success",
-                    content = event,
+                    content = str(event),
                 )
         
         except Exception as e:
             yield ToolMessage(
                 tool_call_id = self._extract_tool_call_id(mixed_parameters=mixed_parameters),
                 status = "error",
-                content = f"Exception {type(e).__name__}: {e}\nTraceback: {traceback.format_stack()}"
+                content = " ".join(traceback.format_exception(type(e), e, e.__traceback__))
             )
             
     def __str__(self):
