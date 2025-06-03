@@ -39,9 +39,10 @@ class ToolKit(pydantic.BaseModel):
         return [self.tools[call["name"]].run(call) for call in calls]
     
     async def arun(self, calls: List[ToolCall]) -> List[ToolMessage]:
-        return asyncio.gather(
+        results = await asyncio.gather(
             *[self.tools[call["name"]].arun(call) for call in calls]
         )
+        return results
         
     def tool(self, f: Callable) -> BaseTool:
         """
