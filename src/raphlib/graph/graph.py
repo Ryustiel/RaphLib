@@ -47,6 +47,16 @@ class GraphBuilder(Generic[State]):
         compiled_graph = self.__graph.compile()
         return compiled_graph
     
+    def subgraph_node(self, graph: CompiledStateGraph, name: str, next: str = "__end__") -> None:
+        """
+        Add a pre-compiled graph to the current graph.
+
+        Parameters:
+            graph (CompiledStateGraph): The pre-compiled graph to add.
+            name (str): The name of the node in the current graph.
+        """
+        self.__edges.add(name, next)
+        self.__graph.add_node(node=name, action=graph)
     
     def node(self, name: Optional[str] = None, update: Optional[str | List[str]] = None, next: str | List[str] = []) -> Callable[[State], Dict[str, Any]]:
         """
@@ -60,7 +70,7 @@ class GraphBuilder(Generic[State]):
         """
         if isinstance(next, str): next = [next]
         if update is not None and isinstance(update, str): update = [update]
-
+        
         if isinstance(name, Callable):  # Decorator mode
             func = name
             name = None
