@@ -125,6 +125,7 @@ class RemoteGraphClient(GraphClient):
                         "configurable": config,
                     },
                     "stream_mode": ["custom", "values"],
+                    "stream_subgraphs": True,
                 }, 
                 headers = {"Content-Type": "application/json"}
             ) as response:
